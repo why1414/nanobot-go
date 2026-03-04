@@ -22,7 +22,7 @@ type AgentOptions struct {
 	MaxIter int
 	// Temperature controls sampling randomness (default 0.1).
 	Temperature float64
-	// MaxTokens caps the response length (default 4096).
+	// MaxTokens caps the response length (default 65536).
 	MaxTokens int
 	// MemoryWindow is the max number of history messages passed to the LLM (default 100).
 	MemoryWindow int
@@ -37,7 +37,7 @@ func (o *AgentOptions) withDefaults() AgentOptions {
 		out.Temperature = 0.1
 	}
 	if out.MaxTokens <= 0 {
-		out.MaxTokens = 4096
+		out.MaxTokens = 65536
 	}
 	if out.MemoryWindow <= 0 {
 		out.MemoryWindow = 100
