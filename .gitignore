@@ -1,0 +1,10 @@
+# Compiled binaries
+nanobot-go
+*.exe
+
+# Claude Code local settings
+.claude/
+
+# Environment files
+.env
+.env.*
