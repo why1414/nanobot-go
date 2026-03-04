@@ -143,3 +143,19 @@ calls are made.
 | `find_by_model()` | `FindByModel()` |
 | `find_gateway()` | `FindGateway()` |
 | `find_by_name()` | `FindByName()` |
+
+## Quick Start
+
+```bash
+# Build
+go build -o nanobot-go ./cmd/nanobot
+
+# Run with Copilot Proxy (default)
+./nanobot-go
+
+# Run with Anthropic
+./nanobot-go -api-key sk-ant-xxx -model claude-sonnet-4-5
+
+# Run with OpenRouter
+./nanobot-go -api-key sk-or-xxx -api-base https://openrouter.ai/api/v1 -model anthropic/claude-opus-4
+```
