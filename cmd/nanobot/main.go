@@ -36,7 +36,7 @@ func main() {
 	// -------------------------------------------------------------------------
 	// Flags
 	// -------------------------------------------------------------------------
-	model := flag.String("model", "claude-sonnet-4-6", "LLM model name")
+	model := flag.String("model", "claude-sonnet-4.6", "LLM model name")
 	apiKey := flag.String("api-key", "", "API key (falls back to env: ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)")
 	apiBase := flag.String("api-base", "http://localhost:4141/v1", "API base URL")
 	workspace := flag.String("workspace", "", "Workspace directory (default: current directory)")
