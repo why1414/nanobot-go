@@ -105,7 +105,7 @@ func (c *CLIChannel) Start(ctx context.Context) error {
 		}
 
 		// Wait for the agent's reply, showing a spinner in the meantime.
-		reply := c.waitForReply(ctx)
+		reply := c.WaitForReply(ctx)
 		if reply == "" {
 			// ctx was cancelled while waiting.
 			fmt.Println("\nGoodbye!")
@@ -115,9 +115,9 @@ func (c *CLIChannel) Start(ctx context.Context) error {
 	}
 }
 
-// waitForReply blocks until a reply is available in the replies channel or ctx
+// WaitForReply blocks until a reply is available in the replies channel or ctx
 // is cancelled. While waiting it prints a simple spinner on stderr.
-func (c *CLIChannel) waitForReply(ctx context.Context) string {
+func (c *CLIChannel) WaitForReply(ctx context.Context) string {
 	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	frameIdx := 0
 	ticker := time.NewTicker(100 * time.Millisecond)
