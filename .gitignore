@@ -8,3 +8,6 @@ nanobot-go
 # Environment files
 .env
 .env.*
+
+# Task files
+TASK.md
