@@ -1,51 +1,184 @@
-# nanobot-go / provider
+# nanobot-go
 
-Go implementation of NanoBot's LLM provider layer.
+A full Go port of [NanoBot](https://github.com/libo/nanobot) — a lightweight,
+tool-calling AI agent that works with any OpenAI-compatible LLM endpoint.
 
-This module is the Go equivalent of the Python `nanobot/providers/` package.
-It provides a uniform `LLMProvider` interface backed by direct HTTP calls to
-any OpenAI-compatible `/chat/completions` endpoint — no SDK dependency, no
-LiteLLM routing layer.
+No SDK dependency for the LLM layer; direct `net/http` calls only.
+External dependencies are limited to the TUI renderer
+([Bubble Tea](https://github.com/charmbracelet/bubbletea) /
+[Lipgloss](https://github.com/charmbracelet/lipgloss)) and the Feishu
+[lark-oapi](https://github.com/larksuite/oapi-sdk-go) SDK.
+
+---
+
+## Features
+
+| Status | Feature |
+|--------|---------|
+| ✅ | OpenAI-compatible provider (direct HTTP, no SDK) |
+| ✅ | Tool system — shell exec, read/write/edit/list file tools |
+| ✅ | ReAct agent loop with multi-turn session history |
+| ✅ | CLI channel (stdin/stdout) |
+| ✅ | TUI mode (Bubble Tea interactive terminal UI) |
+| ✅ | Gateway subcommand (multi-channel server) |
+| ✅ | Feishu/Lark channel (WebSocket long connection, no public IP needed) |
+| ☐ | Telegram channel |
+| ☐ | Config file support (YAML/TOML) |
+| ☐ | Memory / session persistence (disk) |
+| ☐ | Docker support |
+| ☐ | Cron / heartbeat service |
+| ☐ | Multi-agent orchestration |
+| ☐ | Web search tool |
+
+---
 
 ## Package layout
 
-| File | Python equivalent | Purpose |
-|------|-------------------|---------|
-| `provider/interface.go` | `providers/base.py` | Core types and `LLMProvider` interface |
-| `provider/registry.go` | `providers/registry.py` | `ProviderSpec` registry + lookup helpers |
-| `provider/openai_compat.go` | `providers/custom_provider.py` | Direct HTTP OpenAI-compatible provider |
-| `provider/factory.go` | config init logic | `NewProvider` factory wiring config → provider |
+| Package | File(s) | Role |
+|---------|---------|------|
+| `provider` | `interface.go` | Core types: `Message`, `LLMResponse`, `LLMProvider` interface |
+| `provider` | `registry.go` | `ProviderSpec` registry + `FindByModel` / `FindGateway` / `FindByName` |
+| `provider` | `openai_compat.go` | Direct HTTP OpenAI-compatible provider |
+| `provider` | `factory.go` | `NewProvider(ProviderConfig)` factory |
+| `bus` | `bus.go` | `MessageBus`: buffered Go channels for inbound / outbound messages |
+| `tool` | `tool.go` | `Tool` interface + `ToolRegistry` (Register / Get / Execute) |
+| `tool` | `shell.go` | `ShellTool` ("exec"): runs `sh -c` with timeout, captures stdout+stderr |
+| `tool` | `filesystem.go` | `ReadFileTool`, `WriteFileTool`, `EditFileTool`, `ListDirTool` |
+| `agent` | `session.go` | `SessionMessage`, `Session`, `SessionManager` (in-memory) |
+| `agent` | `context.go` | `BuildMessages`, `AddAssistantMessage`, `AddToolResult` helpers |
+| `agent` | `loop.go` | `AgentLoop`: `Run(ctx)`, `ProcessMessage`, `runReActLoop` |
+| `channel` | `channel.go` | `Channel` interface + `BaseChannel` (allowlist, `HandleMessage`) |
+| `channel` | `cli.go` | `CLIChannel`: stdin loop, spinner, `/new` `/exit` `/quit` commands |
+| `channel` | `tui.go` | `TUIChannel`: Bubble Tea interactive TUI |
+| `channel` | `feishu.go` | `FeishuChannel`: Feishu/Lark bot via WebSocket long connection |
+| `cmd/nanobot` | `main.go` | Entry point: flags, wires provider + bus + agent + channel |
+| `cmd/nanobot` | `gateway.go` | `gateway` subcommand: multi-channel server (CLI + Feishu) |
+
+---
+
+## Architecture
+
+```
+┌──────────────┐     InboundMessage     ┌─────────────┐
+│   Channel    │ ─────────────────────► │ MessageBus  │
+│ (CLI / TUI / │                        │  (buffered  │
+│  Feishu/...) │ ◄───────────────────── │   channels) │
+└──────────────┘    OutboundMessage     └──────┬──────┘
+                                               │
+                                        ┌──────▼──────┐
+                                        │  AgentLoop  │
+                                        │  (ReAct)    │
+                                        └──────┬──────┘
+                                  Chat  │      │ ToolCall
+                            ┌──────────┘      └──────────┐
+                            ▼                             ▼
+                     ┌─────────────┐             ┌──────────────┐
+                     │ LLMProvider │             │ ToolRegistry │
+                     │ (OpenAI-    │             │ (shell, fs)  │
+                     │  compat)    │             └──────────────┘
+                     └─────────────┘
+```
+
+Channels publish user messages onto the bus as `InboundMessage` values.
+The `AgentLoop` consumes them, runs a ReAct loop (LLM → tool calls →
+observations → LLM …), then publishes the final reply as an
+`OutboundMessage`.  An outbound dispatcher goroutine in `main` (or
+`gateway`) reads outbound messages and routes each one back to the
+originating channel by name.
+
+---
 
 ## Quick start
 
-```go
-import (
-    "context"
-    "fmt"
-    "github.com/libo/nanobot-go/provider"
-)
+### Build
 
-func main() {
-    p, err := provider.NewProvider(provider.ProviderConfig{
-        APIKey: "sk-...",
-        Model:  "gpt-4o",
-    })
-    if err != nil {
-        panic(err)
-    }
-
-    resp, err := p.Chat(context.Background(), []provider.Message{
-        {Role: "user", Content: "Hello!"},
-    }, provider.ChatOptions{})
-    if err != nil {
-        panic(err)
-    }
-
-    if resp.Content != nil {
-        fmt.Println(*resp.Content)
-    }
-}
+```bash
+go build -o nanobot ./cmd/nanobot
 ```
+
+### TUI mode (default — no flags)
+
+```bash
+# Uses Copilot proxy on localhost:4141 by default
+./nanobot
+
+# Anthropic
+./nanobot -api-key sk-ant-xxx -model claude-sonnet-4-6
+
+# OpenRouter
+./nanobot -api-key sk-or-xxx \
+          -api-base https://openrouter.ai/api/v1 \
+          -model anthropic/claude-opus-4-6
+```
+
+The TUI renders a full-screen chat interface. Type your message and press
+**Enter**. Commands:
+
+| Command | Action |
+|---------|--------|
+| `/new` | Start a new conversation session |
+| `/exit` or `/quit` | Quit |
+| `Ctrl-C` | Quit |
+
+### Single message (`-m`)
+
+```bash
+./nanobot -m "List the Go files in the current directory"
+```
+
+Prints the assistant reply to stdout and exits. Useful for scripting.
+
+### Gateway mode
+
+Runs a multi-channel server that accepts messages from the CLI and
+optionally from Feishu/Lark simultaneously.
+
+```bash
+./nanobot gateway \
+  -port 18790 \
+  -feishu-app-id    $FEISHU_APP_ID \
+  -feishu-app-secret $FEISHU_APP_SECRET \
+  -feishu-encrypt-key $FEISHU_ENCRYPT_KEY \
+  -feishu-allow ou_xxxx \
+  -feishu-allow ou_yyyy
+```
+
+Feishu credentials can also be supplied via environment variables
+`FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_ENCRYPT_KEY`.
+
+If no Feishu credentials are provided the gateway starts with the CLI
+channel only.
+
+---
+
+## All flags
+
+### Agent / TUI / single-message mode
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-model` | `claude-haiku-4.5` | LLM model name |
+| `-api-key` | _(env)_ | API key (falls back to `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …) |
+| `-api-base` | `http://localhost:4141/v1` | API base URL |
+| `-workspace` | cwd | Workspace directory (tool sandbox root) |
+| `-max-iter` | `40` | Max agent iterations per message |
+| `-temp` | `0.1` | Sampling temperature |
+| `-max-tokens` | `65536` | Max response tokens |
+| `-m` | — | Single message (non-interactive) |
+
+### Gateway subcommand
+
+All of the above flags, plus:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-port` | `18790` | Gateway port |
+| `-feishu-app-id` | — | Feishu App ID |
+| `-feishu-app-secret` | — | Feishu App Secret |
+| `-feishu-encrypt-key` | — | Feishu Encrypt Key |
+| `-feishu-allow` | _(all)_ | Allowed sender open IDs (repeatable) |
+
+---
 
 ## Using a specific provider
 
@@ -53,7 +186,7 @@ func main() {
 // OpenRouter (auto-detected by "sk-or-" key prefix)
 p, _ := provider.NewProvider(provider.ProviderConfig{
     APIKey: "sk-or-v1-...",
-    Model:  "anthropic/claude-opus-4-5",
+    Model:  "anthropic/claude-opus-4-6",
 })
 
 // DeepSeek (auto-detected by model keyword)
@@ -81,7 +214,7 @@ p, _ := provider.NewProvider(provider.ProviderConfig{
 })
 ```
 
-## Tool calls
+## Tool calls (provider API)
 
 ```go
 tools := []provider.Tool{{
@@ -120,42 +253,33 @@ spec := provider.FindGateway("", "sk-or-v1-abc", "")  // → ProviderSpec{Name:"
 spec := provider.FindByName("dashscope")
 ```
 
+---
+
 ## Running tests
 
 ```bash
-cd /path/to/nanobot-go
-go test ./provider/...
+go test ./...
 ```
 
 All tests use `httptest.NewServer` to mock the HTTP endpoint — no real API
 calls are made.
 
-## Correspondence with Python
+---
+
+## Correspondence with Python nanobot
 
 | Python | Go |
 |--------|----|
-| `LLMProvider` ABC | `LLMProvider` interface |
-| `LLMResponse` dataclass | `LLMResponse` struct |
-| `ToolCallRequest` dataclass | `ToolCallRequest` struct |
-| `CustomProvider` | `OpenAICompatProvider` |
-| `LiteLLMProvider` | factory + `OpenAICompatProvider` (direct HTTP) |
-| `ProviderSpec` dataclass | `ProviderSpec` struct |
-| `find_by_model()` | `FindByModel()` |
-| `find_gateway()` | `FindGateway()` |
-| `find_by_name()` | `FindByName()` |
-
-## Quick Start
-
-```bash
-# Build
-go build -o nanobot-go ./cmd/nanobot
-
-# Run with Copilot Proxy (default)
-./nanobot-go
-
-# Run with Anthropic
-./nanobot-go -api-key sk-ant-xxx -model claude-sonnet-4-5
-
-# Run with OpenRouter
-./nanobot-go -api-key sk-or-xxx -api-base https://openrouter.ai/api/v1 -model anthropic/claude-opus-4
-```
+| `providers/base.py` | `provider/interface.go` |
+| `providers/registry.py` | `provider/registry.go` |
+| `providers/custom_provider.py` | `provider/openai_compat.go` |
+| `providers/litellm_provider.py` | `provider/factory.go` + `openai_compat.go` |
+| `bus/events.py` + `queue.py` | `bus/bus.go` |
+| `agent/tools/base.py` + `registry.py` | `tool/tool.go` |
+| `agent/tools/shell.py` | `tool/shell.go` |
+| `agent/tools/filesystem.py` | `tool/filesystem.go` |
+| `agent/loop.py` | `agent/loop.go` + `context.go` + `session.go` |
+| `channels/base.py` | `channel/channel.go` |
+| `channels/cli.py` | `channel/cli.go` |
+| `channels/feishu.py` | `channel/feishu.go` |
+| `cli/commands.py` (agent cmd) | `cmd/nanobot/main.go` + `gateway.go` |
