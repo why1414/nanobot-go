@@ -67,6 +67,19 @@ var providers = []*ProviderSpec{
 		IsDirect:    true,
 	},
 
+	// GitHub Copilot Proxy ────────────────────────────────────────────────────
+	// The Copilot Proxy splits content and tool_calls across multiple choices;
+	// use CopilotProvider (not OpenAICompatProvider) for this endpoint.
+	{
+		Name:                "copilot",
+		Keywords:            []string{"copilot"},
+		EnvKey:              "GITHUB_TOKEN",
+		DisplayName:         "GitHub Copilot",
+		IsGateway:           true,
+		DetectByBaseKeyword: "githubcopilot",
+		DefaultAPIBase:      "https://api.githubcopilot.com",
+	},
+
 	// Gateways ────────────────────────────────────────────────────────────────
 
 	{

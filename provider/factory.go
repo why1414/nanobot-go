@@ -54,7 +54,7 @@ func NewProvider(cfg ProviderConfig) (LLMProvider, error) {
 		if baseURL == "" {
 			return nil, fmt.Errorf("provider: custom provider requires APIBase")
 		}
-		return buildProvider(apiKey, baseURL, cfg.Model, cfg.ExtraHeaders), nil
+		return buildProvider(apiKey, baseURL, cfg.Model, cfg.ExtraHeaders, nil), nil
 	}
 
 	// --- Gateway detection ---------------------------------------------------
@@ -66,7 +66,7 @@ func NewProvider(cfg ProviderConfig) (LLMProvider, error) {
 		if baseURL == "" {
 			return nil, fmt.Errorf("provider: gateway %q requires APIBase", gateway.Name)
 		}
-		return buildProvider(apiKey, baseURL, cfg.Model, cfg.ExtraHeaders), nil
+		return buildProvider(apiKey, baseURL, cfg.Model, cfg.ExtraHeaders, gateway), nil
 	}
 
 	// --- Standard provider ---------------------------------------------------
@@ -98,11 +98,20 @@ func NewProvider(cfg ProviderConfig) (LLMProvider, error) {
 		baseURL = "https://api.openai.com/v1"
 	}
 
-	return buildProvider(apiKey, baseURL, cfg.Model, cfg.ExtraHeaders), nil
+	return buildProvider(apiKey, baseURL, cfg.Model, cfg.ExtraHeaders, spec), nil
 }
 
-// buildProvider wires a configured OpenAICompatProvider.
-func buildProvider(apiKey, baseURL, model string, extraHeaders map[string]string) *OpenAICompatProvider {
+// buildProvider wires a configured provider. For the GitHub Copilot Proxy,
+// CopilotProvider is used to handle its non-standard multi-choice responses.
+// All other endpoints use the standard OpenAICompatProvider.
+func buildProvider(apiKey, baseURL, model string, extraHeaders map[string]string, spec *ProviderSpec) LLMProvider {
+	if spec != nil && spec.Name == "copilot" {
+		p := NewCopilotProvider(apiKey, baseURL, model)
+		if len(extraHeaders) > 0 {
+			p.OpenAICompatProvider = p.OpenAICompatProvider.WithExtraHeaders(extraHeaders)
+		}
+		return p
+	}
 	p := NewOpenAICompatProvider(apiKey, baseURL, model)
 	if len(extraHeaders) > 0 {
 		p = p.WithExtraHeaders(extraHeaders)
