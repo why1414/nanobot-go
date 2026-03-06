@@ -152,7 +152,23 @@ func (l *AgentLoop) runReActLoop(ctx context.Context, messages []provider.Messag
 			return "", messages, fmt.Errorf("LLM chat: %w", err)
 		}
 
-		if resp.HasToolCalls() {
+		// Use ShouldCallTools() instead of HasToolCalls() so that a response
+		// with finish_reason="tool_calls" but no parsed ToolCalls objects still
+		// enters the tool-call branch (and emits a warning) rather than being
+		// silently treated as a final answer.
+		if resp.ShouldCallTools() {
+			if !resp.HasToolCalls() {
+				// finish_reason="tool_calls" but ToolCalls list is empty — the
+				// provider warning was already logged in parseResponse.  There
+				// is nothing to execute; break out to avoid an infinite loop.
+				slog.Warn("ShouldCallTools() true but no tool calls available; treating as final answer")
+				finalContent := ""
+				if resp.Content != nil {
+					finalContent = *resp.Content
+				}
+				messages = AddAssistantMessage(messages, finalContent, nil)
+				return finalContent, messages, nil
+			}
 			slog.Info("tool calls requested", "tools", toolCallHint(resp.ToolCalls), "iter", iter+1)
 
 			// Append assistant message with embedded tool calls.

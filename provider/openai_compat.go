@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -110,6 +111,9 @@ func (p *OpenAICompatProvider) Chat(ctx context.Context, messages []Message, opt
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("provider: http %d: %s", resp.StatusCode, truncate(string(body), 512))
 	}
+
+	// Log raw response to help diagnose tool_calls parsing issues.
+	slog.Debug("raw LLM response", "body", truncate(string(body), 2048))
 
 	return parseResponse(body)
 }
@@ -271,12 +275,52 @@ func parseResponse(body []byte) (*LLMResponse, error) {
 		return nil, fmt.Errorf("provider: response has no choices")
 	}
 
-	choice := raw.Choices[0]
-	msg := choice.Message
+	// Some providers (e.g. Copilot Proxy) split a single assistant turn into
+	// multiple choices: choices[0] carries content and choices[1] carries
+	// tool_calls.  We merge all choices into a single logical response to
+	// handle this correctly.
+
+	var (
+		mergedContent  *string
+		mergedRawCalls []openaiTCall
+		finishReason   string
+		reasoning      *string
+	)
+
+	for _, choice := range raw.Choices {
+		msg := choice.Message
+
+		// Accumulate content — pick the first non-nil content.
+		if mergedContent == nil && msg.Content != nil {
+			mergedContent = msg.Content
+		}
+
+		// Accumulate tool calls from all choices.
+		mergedRawCalls = append(mergedRawCalls, msg.ToolCalls...)
+
+		// Use the most informative finish_reason: prefer "tool_calls" over
+		// "stop" since it indicates tools should be executed.
+		if choice.FinishReason == "tool_calls" || finishReason == "" {
+			finishReason = choice.FinishReason
+		}
+
+		// reasoning_content may come under either key depending on the provider.
+		if reasoning == nil {
+			if msg.ReasoningContent != nil {
+				reasoning = msg.ReasoningContent
+			} else if msg.Reasoning != nil {
+				reasoning = msg.Reasoning
+			}
+		}
+	}
+
+	if finishReason == "" {
+		finishReason = "stop"
+	}
 
 	// Parse tool calls, repairing truncated JSON arguments where possible.
-	toolCalls := make([]ToolCallRequest, 0, len(msg.ToolCalls))
-	for _, tc := range msg.ToolCalls {
+	toolCalls := make([]ToolCallRequest, 0, len(mergedRawCalls))
+	for _, tc := range mergedRawCalls {
 		args, err := parseArguments(tc.Function.Arguments)
 		if err != nil {
 			// Fall back to empty map rather than failing the whole request.
@@ -289,6 +333,10 @@ func parseResponse(body []byte) (*LLMResponse, error) {
 		})
 	}
 
+	if len(raw.Choices) > 1 {
+		slog.Info("merged multiple choices", "count", len(raw.Choices), "tool_calls", len(toolCalls))
+	}
+
 	usage := map[string]int{}
 	if raw.Usage != nil {
 		usage["prompt_tokens"] = raw.Usage.PromptTokens
@@ -296,19 +344,15 @@ func parseResponse(body []byte) (*LLMResponse, error) {
 		usage["total_tokens"] = raw.Usage.TotalTokens
 	}
 
-	finishReason := choice.FinishReason
-	if finishReason == "" {
-		finishReason = "stop"
-	}
-
-	// reasoning_content may come under either key depending on the provider.
-	reasoning := msg.ReasoningContent
-	if reasoning == nil {
-		reasoning = msg.Reasoning
+	// Warn when the model signals tool_calls via finish_reason but provided no
+	// parseable tool call objects — this usually means a serialization issue on
+	// the provider side and would cause the agent loop to hang without a warning.
+	if finishReason == "tool_calls" && len(toolCalls) == 0 {
+		slog.Warn("finish_reason=tool_calls but no tool_calls parsed; check raw response", "raw_tool_calls", len(mergedRawCalls))
 	}
 
 	return &LLMResponse{
-		Content:          msg.Content,
+		Content:          mergedContent,
 		ToolCalls:        toolCalls,
 		FinishReason:     finishReason,
 		Usage:            usage,

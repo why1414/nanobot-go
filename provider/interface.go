@@ -29,6 +29,18 @@ func (r *LLMResponse) HasToolCalls() bool {
 	return len(r.ToolCalls) > 0
 }
 
+// ShouldCallTools reports whether the agent loop should enter the tool-call
+// branch. This is true when:
+//   - ToolCalls is non-empty (the model provided parsed tool calls), OR
+//   - FinishReason is "tool_calls" (the model signalled tool use via the
+//     finish reason, even if ToolCalls could not be parsed).
+//
+// Checking FinishReason alone prevents the common bug where the model returns
+// content + tool_calls simultaneously and the loop treats it as a final answer.
+func (r *LLMResponse) ShouldCallTools() bool {
+	return len(r.ToolCalls) > 0 || r.FinishReason == "tool_calls"
+}
+
 // Message is an OpenAI-compatible chat message.
 type Message struct {
 	// Role is "system", "user", "assistant", or "tool".
