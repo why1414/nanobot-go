@@ -16,12 +16,14 @@ type SessionMessage struct {
 	ToolCallID string
 	Name       string
 	Timestamp  time.Time
+	ToolsUsed  []string // Tools used in this message (for memory consolidation)
 }
 
 // Session holds the conversation history for a single chat session.
 type Session struct {
-	Key      string
-	Messages []SessionMessage
+	Key              string
+	Messages         []SessionMessage
+	LastConsolidated int // Index of last consolidated message
 }
 
 // SessionManager stores sessions in memory, keyed by session key.

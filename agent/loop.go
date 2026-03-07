@@ -54,21 +54,23 @@ func (o *AgentOptions) withDefaults() AgentOptions {
 //  4. Executes tool calls and feeds results back to the LLM.
 //  5. Publishes the final response to the outbound bus.
 type AgentLoop struct {
-	bus      *bus.MessageBus
-	provider provider.LLMProvider
-	tools    *tool.ToolRegistry
-	sessions *SessionManager
-	opts     AgentOptions
+	bus         *bus.MessageBus
+	provider    provider.LLMProvider
+	tools       *tool.ToolRegistry
+	sessions    *SessionManager
+	opts        AgentOptions
+	memoryStore *MemoryStore
 }
 
 // NewAgentLoop creates an AgentLoop.
-func NewAgentLoop(b *bus.MessageBus, p provider.LLMProvider, tools *tool.ToolRegistry, opts AgentOptions) *AgentLoop {
+func NewAgentLoop(b *bus.MessageBus, p provider.LLMProvider, tools *tool.ToolRegistry, opts AgentOptions, memoryStore *MemoryStore) *AgentLoop {
 	return &AgentLoop{
-		bus:      b,
-		provider: p,
-		tools:    tools,
-		sessions: NewSessionManager(),
-		opts:     opts.withDefaults(),
+		bus:         b,
+		provider:    p,
+		tools:       tools,
+		sessions:    NewSessionManager(),
+		opts:        opts.withDefaults(),
+		memoryStore: memoryStore,
 	}
 }
 
@@ -113,6 +115,16 @@ func (l *AgentLoop) ProcessMessage(ctx context.Context, msg *bus.InboundMessage)
 	slog.Info("processing message", "channel", msg.Channel, "sender", msg.SenderID, "content", preview)
 
 	sessionKey := msg.SessionKey()
+	session := l.sessions.GetOrCreate(sessionKey)
+
+	// Check if memory consolidation is needed before processing
+	if l.memoryStore != nil && len(session.Messages) >= l.opts.MemoryWindow {
+		slog.Info("memory consolidation triggered", "messages", len(session.Messages), "window", l.opts.MemoryWindow)
+		l.memoryStore.Consolidate(ctx, session, l.provider, l.opts.Model, ConsolidateOptions{
+			MemoryWindow: l.opts.MemoryWindow,
+		})
+	}
+
 	history := l.sessions.GetHistory(sessionKey, l.opts.MemoryWindow)
 
 	messages := BuildMessages(l.opts.systemPrompt(), history, msg.Content)
@@ -217,6 +229,15 @@ func (l *AgentLoop) saveTurn(sessionKey string, before, after []provider.Message
 	const maxToolResultChars = 500
 	newProviderMsgs := after[len(before):]
 	sessionMsgs := make([]SessionMessage, 0, len(newProviderMsgs))
+
+	var toolsUsed []string
+	// Collect tool names from the entire turn
+	for _, m := range newProviderMsgs {
+		for _, tc := range m.ToolCalls {
+			toolsUsed = append(toolsUsed, tc.Function.Name)
+		}
+	}
+
 	for _, m := range newProviderMsgs {
 		content := ""
 		switch v := m.Content.(type) {
@@ -227,6 +248,15 @@ func (l *AgentLoop) saveTurn(sessionKey string, before, after []provider.Message
 		if m.Role == "tool" && len(content) > maxToolResultChars {
 			content = content[:maxToolResultChars] + "\n... (truncated)"
 		}
+
+		// Track tools used for this message
+		var msgToolsUsed []string
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				msgToolsUsed = append(msgToolsUsed, tc.Function.Name)
+			}
+		}
+
 		sessionMsgs = append(sessionMsgs, SessionMessage{
 			Role:       m.Role,
 			Content:    content,
@@ -234,6 +264,7 @@ func (l *AgentLoop) saveTurn(sessionKey string, before, after []provider.Message
 			ToolCallID: m.ToolCallID,
 			Name:       m.Name,
 			Timestamp:  time.Now(),
+			ToolsUsed:  msgToolsUsed,
 		})
 	}
 	l.sessions.AppendMessages(sessionKey, sessionMsgs)

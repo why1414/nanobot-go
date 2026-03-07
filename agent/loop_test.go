@@ -65,7 +65,7 @@ func newTestLoop(p provider.LLMProvider, tools ...*mockTool) (*AgentLoop, *bus.M
 	loop := NewAgentLoop(b, p, reg, AgentOptions{
 		SystemPrompt: "You are a helpful assistant.",
 		MaxIter:      5,
-	})
+	}, nil)
 	return loop, b
 }
 

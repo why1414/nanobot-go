@@ -6,12 +6,16 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/libo/nanobot-go/agent"
 	"github.com/libo/nanobot-go/bus"
 	"github.com/libo/nanobot-go/channel"
+	"github.com/libo/nanobot-go/config"
+	"github.com/libo/nanobot-go/cron"
 	"github.com/libo/nanobot-go/provider"
 	"github.com/libo/nanobot-go/tool"
 )
@@ -25,106 +29,145 @@ func (s *stringSliceFlag) Set(v string) error { *s = append(*s, v); return nil }
 // runGateway implements the "gateway" subcommand.
 func runGateway(args []string) {
 	fs := flag.NewFlagSet("gateway", flag.ExitOnError)
-	port := fs.Int("port", 18790, "Gateway port")
-	model := fs.String("model", "claude-haiku-4.5", "LLM model name")
-	apiKey := fs.String("api-key", "", "API key (falls back to env)")
-	apiBase := fs.String("api-base", "http://localhost:4141/v1", "API base URL")
-	workspace := fs.String("workspace", "", "Workspace directory (default: current directory)")
-	maxIter := fs.Int("max-iter", 40, "Max agent iterations per message")
-	temp := fs.Float64("temp", 0.1, "Sampling temperature")
-	maxTokens := fs.Int("max-tokens", 65536, "Max response tokens")
+	configPath := fs.String("config", "", "Path to config file (default: ~/.nanobot/config.json)")
+	port := fs.Int("port", 0, "Gateway port (overrides config)")
+	model := fs.String("model", "", "LLM model name (overrides config)")
+	apiKey := fs.String("api-key", "", "API key (overrides config)")
+	apiBase := fs.String("api-base", "", "API base URL (overrides config)")
+	workspace := fs.String("workspace", "", "Workspace directory (overrides config)")
+	maxIter := fs.Int("max-iter", 0, "Max agent iterations per message (overrides config)")
+	temp := fs.Float64("temp", 0, "Sampling temperature (overrides config)")
+	maxTokens := fs.Int("max-tokens", 0, "Max response tokens (overrides config)")
 
-	feishuAppID := fs.String("feishu-app-id", "", "Feishu App ID (or FEISHU_APP_ID)")
-	feishuAppSecret := fs.String("feishu-app-secret", "", "Feishu App Secret (or FEISHU_APP_SECRET)")
-	feishuEncryptKey := fs.String("feishu-encrypt-key", "", "Feishu Encrypt Key (or FEISHU_ENCRYPT_KEY)")
+	// Feishu channel flags (override config)
+	feishuAppID := fs.String("feishu-app-id", "", "Feishu App ID (overrides config)")
+	feishuAppSecret := fs.String("feishu-app-secret", "", "Feishu App Secret (overrides config)")
+	feishuEncryptKey := fs.String("feishu-encrypt-key", "", "Feishu Encrypt Key (overrides config)")
 	var feishuAllow stringSliceFlag
 	fs.Var(&feishuAllow, "feishu-allow", "Allowed Feishu sender IDs (repeat flag for multiple)")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: nanobot-go gateway [flags]\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, "Usage: nanobot gateway [flags]\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
 	}
 
-	// Fall back to environment variables for Feishu credentials.
-	if *feishuAppID == "" {
-		*feishuAppID = os.Getenv("FEISHU_APP_ID")
-	}
-	if *feishuAppSecret == "" {
-		*feishuAppSecret = os.Getenv("FEISHU_APP_SECRET")
-	}
-	if *feishuEncryptKey == "" {
-		*feishuEncryptKey = os.Getenv("FEISHU_ENCRYPT_KEY")
+	// Load config
+	cfg, err := config.LoadConfig(*configPath)
+	if err != nil {
+		slog.Error("failed to load config", "error", err)
+		os.Exit(1)
 	}
 
-	// Workspace
-	workspaceDir := *workspace
-	if workspaceDir == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			slog.Error("failed to get working directory", "error", err)
-			os.Exit(1)
-		}
-		workspaceDir = cwd
+	// Apply CLI overrides
+	cfg.MergeFlags(*model, *apiKey, *apiBase, *workspace, *maxIter, *temp, *maxTokens)
+
+	// Apply Feishu overrides
+	if *feishuAppID != "" {
+		cfg.Channels.Feishu.AppID = *feishuAppID
+	}
+	if *feishuAppSecret != "" {
+		cfg.Channels.Feishu.AppSecret = *feishuAppSecret
+	}
+	if *feishuEncryptKey != "" {
+		cfg.Channels.Feishu.EncryptKey = *feishuEncryptKey
+	}
+	if len(feishuAllow) > 0 {
+		cfg.Channels.Feishu.AllowFrom = feishuAllow
 	}
 
-	// Provider
+	// Gateway port
+	gatewayPort := cfg.Gateway.Port
+	if *port > 0 {
+		gatewayPort = *port
+	}
+
+	// Determine workspace
+	workspaceDir := cfg.WorkspacePath()
+
+	// Determine model and provider
+	modelName := cfg.GetModel()
+	apiKeyValue := cfg.GetAPIKey(modelName)
+	apiBaseValue := cfg.GetAPIBase(modelName)
+
+	// Create provider
 	p, err := provider.NewProvider(provider.ProviderConfig{
-		APIKey:  *apiKey,
-		APIBase: *apiBase,
-		Model:   *model,
+		APIKey:  apiKeyValue,
+		APIBase: apiBaseValue,
+		Model:   modelName,
 	})
 	if err != nil {
 		slog.Error("failed to create provider", "error", err)
 		os.Exit(1)
 	}
 
-	// Tools
+	// Initialize tools
 	tools := tool.NewToolRegistry()
-	tools.Register(tool.NewShellTool(workspaceDir, 0))
+	tools.Register(tool.NewShellTool(workspaceDir, time.Duration(cfg.Tools.Exec.Timeout)*time.Second))
 	tools.Register(tool.NewReadFileTool(workspaceDir))
 	tools.Register(tool.NewWriteFileTool(workspaceDir))
 	tools.Register(tool.NewEditFileTool(workspaceDir))
 	tools.Register(tool.NewListDirTool(workspaceDir))
 
-	// Bus
+	// Initialize cron service
+	cronService := cron.NewCronService(filepath.Join(workspaceDir, "cron.json"), nil)
+	tools.Register(tool.NewCronTool(cronService))
+
+	// Initialize skills loader
+	skillsLoader := agent.NewSkillsLoader(workspaceDir, "")
+
+	// Initialize memory store
+	memoryStore := agent.NewMemoryStore(workspaceDir)
+
+	// Build system prompt
+	systemPrompt := agent.BuildSystemPrompt(workspaceDir, skillsLoader, memoryStore)
+
+	// Create message bus
 	mb := bus.NewMessageBus(32)
 
-	// Agent loop
+	// Create agent loop
 	agentLoop := agent.NewAgentLoop(mb, p, tools, agent.AgentOptions{
-		Model:       *model,
-		MaxIter:     *maxIter,
-		Temperature: *temp,
-		MaxTokens:   *maxTokens,
-	})
+		SystemPrompt: systemPrompt,
+		Model:        modelName,
+		MaxIter:      cfg.Agents.Defaults.MaxToolIterations,
+		Temperature:  cfg.Agents.Defaults.Temperature,
+		MaxTokens:    cfg.Agents.Defaults.MaxTokens,
+		MemoryWindow: cfg.Agents.Defaults.MemoryWindow,
+	}, memoryStore)
 
-	// Channels
+	// Initialize channels
 	cliCh := channel.NewCLIChannel(mb)
 	channels := []channel.Channel{cliCh}
 
 	var feishuCh *channel.FeishuChannel
-	if *feishuAppID != "" && *feishuAppSecret != "" {
+	if cfg.Channels.Feishu.AppID != "" && cfg.Channels.Feishu.AppSecret != "" {
 		feishuCh = channel.NewFeishuChannel(channel.FeishuConfig{
-			AppID:      *feishuAppID,
-			AppSecret:  *feishuAppSecret,
-			EncryptKey: *feishuEncryptKey,
-			AllowFrom:  feishuAllow,
+			AppID:      cfg.Channels.Feishu.AppID,
+			AppSecret:  cfg.Channels.Feishu.AppSecret,
+			EncryptKey: cfg.Channels.Feishu.EncryptKey,
+			AllowFrom:  cfg.Channels.Feishu.AllowFrom,
 		}, mb)
 		channels = append(channels, feishuCh)
-		slog.Info("feishu channel enabled", "app_id", *feishuAppID)
+		slog.Info("feishu channel enabled", "app_id", cfg.Channels.Feishu.AppID)
 	} else {
 		slog.Info("feishu channel disabled (no credentials)")
 	}
 
-	slog.Info("starting nanobot gateway", "port", *port)
+	slog.Info("starting nanobot gateway", "port", gatewayPort)
 
 	// Context + signal handling
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	setupSignalHandler(cancel)
+
+	// Start cron service
+	if err := cronService.Start(ctx); err != nil {
+		slog.Warn("failed to start cron service", "error", err)
+	}
+	defer cronService.Stop()
 
 	var wg sync.WaitGroup
 

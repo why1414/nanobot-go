@@ -11,13 +11,14 @@
 //	-s, --session string      Session ID (default: cli:direct)
 //	--no-markdown             Disable Markdown rendering of responses
 //	--logs                    Show runtime logs during chat
-//	--model string            LLM model (default: claude-haiku-4.5)
+//	--model string            LLM model (overrides config)
 //	--api-key string          API key (or set env: ANTHROPIC_API_KEY, etc.)
-//	--api-base string         API base URL
-//	--workspace string        Workspace directory (default: cwd)
-//	--max-iter int            Max agent iterations per message (default 40)
-//	--temp float              Sampling temperature (default 0.1)
-//	--max-tokens int          Max response tokens (default 65536)
+//	--api-base string         API base URL (overrides config)
+//	--workspace string        Workspace directory (overrides config)
+//	--max-iter int            Max agent iterations per message (overrides config)
+//	--temp float              Sampling temperature (overrides config)
+//	--max-tokens int          Max response tokens (overrides config)
+//	--config string           Path to config file (default: ~/.nanobot/config.json)
 package main
 
 import (
@@ -28,13 +29,17 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/libo/nanobot-go/agent"
 	"github.com/libo/nanobot-go/bus"
 	"github.com/libo/nanobot-go/channel"
+	"github.com/libo/nanobot-go/config"
+	"github.com/libo/nanobot-go/cron"
 	"github.com/libo/nanobot-go/provider"
 	"github.com/libo/nanobot-go/tool"
 )
@@ -65,6 +70,8 @@ type agentFlags struct {
 	sessionID string
 	markdown  bool
 	logs      bool
+	config    string
+	// Override flags (empty means use config value)
 	model     string
 	apiKey    string
 	apiBase   string
@@ -80,11 +87,6 @@ func parseAgentFlags(args []string) agentFlags {
 	f := agentFlags{
 		sessionID: "cli:direct",
 		markdown:  true,
-		model:     "claude-haiku-4.5",
-		apiBase:   "http://localhost:4141/v1",
-		maxIter:   40,
-		temp:      0.1,
-		maxTokens: 120000,
 	}
 
 	fs.StringVar(&f.message, "m", "", "Single message to send (non-interactive)")
@@ -93,13 +95,14 @@ func parseAgentFlags(args []string) agentFlags {
 	fs.StringVar(&f.sessionID, "session", f.sessionID, "Session ID")
 	noMarkdown := fs.Bool("no-markdown", false, "Disable Markdown rendering")
 	fs.BoolVar(&f.logs, "logs", false, "Show runtime logs during chat")
-	fs.StringVar(&f.model, "model", f.model, "LLM model name")
-	fs.StringVar(&f.apiKey, "api-key", "", "API key")
-	fs.StringVar(&f.apiBase, "api-base", f.apiBase, "API base URL")
-	fs.StringVar(&f.workspace, "workspace", "", "Workspace directory (default: cwd)")
-	fs.IntVar(&f.maxIter, "max-iter", f.maxIter, "Max agent iterations per message")
-	fs.Float64Var(&f.temp, "temp", f.temp, "Sampling temperature")
-	fs.IntVar(&f.maxTokens, "max-tokens", f.maxTokens, "Max response tokens")
+	fs.StringVar(&f.config, "config", "", "Path to config file")
+	fs.StringVar(&f.model, "model", "", "LLM model name (overrides config)")
+	fs.StringVar(&f.apiKey, "api-key", "", "API key (overrides config)")
+	fs.StringVar(&f.apiBase, "api-base", "", "API base URL (overrides config)")
+	fs.StringVar(&f.workspace, "workspace", "", "Workspace directory (overrides config)")
+	fs.IntVar(&f.maxIter, "max-iter", 0, "Max agent iterations per message (overrides config)")
+	fs.Float64Var(&f.temp, "temp", 0, "Sampling temperature (overrides config)")
+	fs.IntVar(&f.maxTokens, "max-tokens", 0, "Max response tokens (overrides config)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: nanobot agent [flags]\n\nFlags:\n")
@@ -128,47 +131,80 @@ func runAgent(args []string) {
 		slog.SetDefault(slog.New(slog.NewTextHandler(ioDiscard{}, nil)))
 	}
 
-	workspaceDir := f.workspace
-	if workspaceDir == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		workspaceDir = cwd
+	// Load config
+	cfg, err := config.LoadConfig(f.config)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading config: %v\n", err)
+		os.Exit(1)
 	}
 
+	// Apply CLI overrides
+	cfg.MergeFlags(f.model, f.apiKey, f.apiBase, f.workspace, f.maxIter, f.temp, f.maxTokens)
+
+	// Determine workspace
+	workspaceDir := cfg.WorkspacePath()
+
+	// Determine model and provider
+	model := cfg.GetModel()
+	apiKey := cfg.GetAPIKey(model)
+	apiBase := cfg.GetAPIBase(model)
+
+	// Create provider
 	p, err := provider.NewProvider(provider.ProviderConfig{
-		APIKey:  f.apiKey,
-		APIBase: f.apiBase,
-		Model:   f.model,
+		APIKey:  apiKey,
+		APIBase: apiBase,
+		Model:   model,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
+	// Initialize tools
 	tools := tool.NewToolRegistry()
-	tools.Register(tool.NewShellTool(workspaceDir, 0))
+	tools.Register(tool.NewShellTool(workspaceDir, time.Duration(cfg.Tools.Exec.Timeout)*time.Second))
 	tools.Register(tool.NewReadFileTool(workspaceDir))
 	tools.Register(tool.NewWriteFileTool(workspaceDir))
 	tools.Register(tool.NewEditFileTool(workspaceDir))
 	tools.Register(tool.NewListDirTool(workspaceDir))
 
+	// Initialize cron service (without callback for CLI mode)
+	cronService := cron.NewCronService(filepath.Join(workspaceDir, "cron.json"), nil)
+	tools.Register(tool.NewCronTool(cronService))
+
+	// Initialize skills loader
+	skillsLoader := agent.NewSkillsLoader(workspaceDir, "")
+
+	// Initialize memory store
+	memoryStore := agent.NewMemoryStore(workspaceDir)
+
+	// Build system prompt
+	systemPrompt := agent.BuildSystemPrompt(workspaceDir, skillsLoader, memoryStore)
+
+	// Create message bus
 	mb := bus.NewMessageBus(32)
 
+	// Create agent loop
 	agentLoop := agent.NewAgentLoop(mb, p, tools, agent.AgentOptions{
-		Model:       f.model,
-		MaxIter:     f.maxIter,
-		Temperature: f.temp,
-		MaxTokens:   f.maxTokens,
-	})
+		SystemPrompt: systemPrompt,
+		Model:        model,
+		MaxIter:      cfg.Agents.Defaults.MaxToolIterations,
+		Temperature:  cfg.Agents.Defaults.Temperature,
+		MaxTokens:    cfg.Agents.Defaults.MaxTokens,
+		MemoryWindow: cfg.Agents.Defaults.MemoryWindow,
+	}, memoryStore)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	setupSignalHandler(cancel)
 
-	// Parse session ID into channel + chat_id.
+	// Start cron service
+	if err := cronService.Start(ctx); err != nil {
+		slog.Warn("failed to start cron service", "error", err)
+	}
+	defer cronService.Stop()
+
+	// Parse session ID into channel + chat_id
 	cliChannelName, cliChatID := "cli", "direct"
 	if strings.Contains(f.sessionID, ":") {
 		parts := strings.SplitN(f.sessionID, ":", 2)
@@ -210,7 +246,7 @@ func runAgentSingleMessage(
 		return
 	}
 
-	// Single consumer — read the reply directly from the bus.
+	// Single consumer — read the reply directly from the bus
 	reply, err := mb.ConsumeOutbound(ctx)
 	if err == nil && reply != nil && reply.Content != "" {
 		printAgentResponse(reply.Content)
@@ -229,7 +265,7 @@ func runAgentInteractive(
 	channelName, chatID string,
 ) {
 	// cliCh is only used to publish inbound messages; we read outbound directly
-	// from the bus to avoid a two-consumer race on mb.Outbound.
+	// from the bus to avoid a two-consumer race on mb.Outbound
 	cliCh := channel.NewCLIChannel(mb)
 
 	agentDone := make(chan struct{})
@@ -292,7 +328,7 @@ func runAgentInteractive(
 			return
 		}
 
-		// Wait for the reply directly from the bus — single consumer, no race.
+		// Wait for the reply directly from the bus — single consumer, no race
 		reply, err := mb.ConsumeOutbound(ctx)
 		if err != nil || reply == nil {
 			fmt.Println("\nGoodbye!")
