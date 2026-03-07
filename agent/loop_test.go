@@ -46,9 +46,11 @@ type mockTool struct {
 	called atomic.Int32
 }
 
-func (t *mockTool) Name() string                        { return t.name }
-func (t *mockTool) Description() string                 { return "mock tool " + t.name }
-func (t *mockTool) Parameters() map[string]any          { return map[string]any{"type": "object", "properties": map[string]any{}} }
+func (t *mockTool) Name() string        { return t.name }
+func (t *mockTool) Description() string { return "mock tool " + t.name }
+func (t *mockTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
 func (t *mockTool) Execute(_ context.Context, _ map[string]any) (string, error) {
 	t.called.Add(1)
 	return t.result, nil
@@ -63,9 +65,8 @@ func newTestLoop(p provider.LLMProvider, tools ...*mockTool) (*AgentLoop, *bus.M
 		reg.Register(t)
 	}
 	loop := NewAgentLoop(b, p, reg, AgentOptions{
-		SystemPrompt: "You are a helpful assistant.",
-		MaxIter:      5,
-	}, nil)
+		MaxIter: 5,
+	}, nil, nil, "/tmp/test-workspace")
 	return loop, b
 }
 

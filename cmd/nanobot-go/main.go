@@ -1,9 +1,10 @@
-// Command nanobot is the CLI entry point for NanoBot.
+//	Command nanobot-go is the CLI entry point for NanoBot-Go.
 //
 // Subcommands:
 //
-//	nanobot agent [flags]        # interactive chat (default when no subcommand)
-//	nanobot gateway [flags]      # start the gateway (Feishu + CLI)
+//	nanobot-go agent [flags]        # interactive chat (default when no subcommand)
+//	nanobot-go gateway [flags]      # start the gateway (Feishu + CLI)
+//	nanobot-go onboard [flags]      # initialize config and workspace
 //
 // Agent flags:
 //
@@ -18,7 +19,11 @@
 //	--max-iter int            Max agent iterations per message (overrides config)
 //	--temp float              Sampling temperature (overrides config)
 //	--max-tokens int          Max response tokens (overrides config)
-//	--config string           Path to config file (default: ~/.nanobot/config.json)
+//	--config string           Path to config file (default: ~/.nanobot-go/config.json)
+//
+// Onboard flags:
+//
+//	--config string           Path to config file (default: ~/.nanobot-go/config.json)
 package main
 
 import (
@@ -58,6 +63,8 @@ func main() {
 		runAgent(os.Args[2:])
 	case "gateway":
 		runGateway(os.Args[2:])
+	case "onboard":
+		runOnboard(os.Args[2:])
 	default:
 		// Treat unknown first arg as flags for agent (backward compat).
 		runAgent(os.Args[1:])
@@ -105,7 +112,7 @@ func parseAgentFlags(args []string) agentFlags {
 	fs.IntVar(&f.maxTokens, "max-tokens", 0, "Max response tokens (overrides config)")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: nanobot agent [flags]\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, "Usage: nanobot-go agent [flags]\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 	_ = fs.Parse(args)
@@ -119,7 +126,7 @@ func parseAgentFlags(args []string) agentFlags {
 // printAgentResponse prints the agent's reply in the same style as the Python version.
 func printAgentResponse(content string) {
 	fmt.Println()
-	fmt.Println("nanobot")
+	fmt.Println("nanobot-go")
 	fmt.Println(content)
 	fmt.Println()
 }
@@ -149,16 +156,11 @@ func runAgent(args []string) {
 	apiKey := cfg.GetAPIKey(model)
 	apiBase := cfg.GetAPIBase(model)
 
+	// Log current model configuration
+	slog.Info("model configuration", "model", model)
+
 	// Create provider
-	p, err := provider.NewProvider(provider.ProviderConfig{
-		APIKey:  apiKey,
-		APIBase: apiBase,
-		Model:   model,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
+	p := provider.NewOpenAICompatProvider(apiKey, apiBase, model)
 
 	// Initialize tools
 	tools := tool.NewToolRegistry()
@@ -172,27 +174,29 @@ func runAgent(args []string) {
 	cronService := cron.NewCronService(filepath.Join(workspaceDir, "cron.json"), nil)
 	tools.Register(tool.NewCronTool(cronService))
 
+	// Initialize workspace (ensure directories and files exist)
+	builtinSkillsDir := "" // Will use embedded skills if available
+	if err := agent.EnsureWorkspace(workspaceDir, builtinSkillsDir); err != nil {
+		slog.Warn("failed to initialize workspace", "error", err)
+	}
+
 	// Initialize skills loader
-	skillsLoader := agent.NewSkillsLoader(workspaceDir, "")
+	skillsLoader := agent.NewSkillsLoader(workspaceDir, builtinSkillsDir)
 
 	// Initialize memory store
 	memoryStore := agent.NewMemoryStore(workspaceDir)
-
-	// Build system prompt
-	systemPrompt := agent.BuildSystemPrompt(workspaceDir, skillsLoader, memoryStore)
 
 	// Create message bus
 	mb := bus.NewMessageBus(32)
 
 	// Create agent loop
 	agentLoop := agent.NewAgentLoop(mb, p, tools, agent.AgentOptions{
-		SystemPrompt: systemPrompt,
 		Model:        model,
 		MaxIter:      cfg.Agents.Defaults.MaxToolIterations,
 		Temperature:  cfg.Agents.Defaults.Temperature,
 		MaxTokens:    cfg.Agents.Defaults.MaxTokens,
 		MemoryWindow: cfg.Agents.Defaults.MemoryWindow,
-	}, memoryStore)
+	}, memoryStore, skillsLoader, workspaceDir)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -276,7 +280,7 @@ func runAgentInteractive(
 		}
 	}()
 
-	fmt.Println("nanobot Interactive mode (type exit or Ctrl+C to quit)")
+	fmt.Println("nanobot-go Interactive mode (type exit or Ctrl+C to quit)")
 	fmt.Println()
 
 	exitCmds := map[string]bool{
@@ -348,6 +352,131 @@ func setupSignalHandler(cancel context.CancelFunc) {
 		<-sigCh
 		cancel()
 	}()
+}
+
+// runOnboard initializes nanobot-go configuration and workspace.
+func runOnboard(args []string) {
+	fs := flag.NewFlagSet("onboard", flag.ExitOnError)
+	configPath := fs.String("config", "", "Path to config file")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: nanobot-go onboard [flags]\n\n")
+		fmt.Fprintf(os.Stderr, "Initialize nanobot-go configuration and workspace.\n\nFlags:\n")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+
+	// Determine config path
+	cfgPath := *configPath
+	if cfgPath == "" {
+		cfgPath = config.GetConfigPath()
+	}
+
+	cfgDir := filepath.Dir(cfgPath)
+
+	fmt.Println()
+	fmt.Println("🤖 nanobot-go")
+	fmt.Println()
+
+	// Check if config already exists
+	if _, err := os.Stat(cfgPath); err == nil {
+		fmt.Printf("Config already exists at %s\n", cfgPath)
+		fmt.Println("  y = overwrite with defaults (existing values will be lost)")
+		fmt.Println("  N = refresh config, keeping existing values and adding new fields")
+
+		fmt.Print("Overwrite? [y/N]: ")
+		var response string
+		fmt.Scanln(&response)
+
+		if response == "y" || response == "Y" {
+			// Create new default config
+			cfg := config.DefaultConfig()
+			if err := config.SaveConfig(cfg, cfgPath); err != nil {
+				fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("✓ Config reset to defaults at %s\n", cfgPath)
+		} else {
+			// Load existing and re-save (to add new fields)
+			cfg, err := config.LoadConfig(cfgPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+				os.Exit(1)
+			}
+			if err := config.SaveConfig(cfg, cfgPath); err != nil {
+				fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("✓ Config refreshed at %s (existing values preserved)\n", cfgPath)
+		}
+	} else {
+		// Create new config
+		cfg := config.DefaultConfig()
+		if err := os.MkdirAll(cfgDir, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating config directory: %v\n", err)
+			os.Exit(1)
+		}
+		if err := config.SaveConfig(cfg, cfgPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("✓ Created config at %s\n", cfgPath)
+	}
+
+	// Load config to get workspace path
+	cfg, err := config.LoadConfig(cfgPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	workspace := cfg.WorkspacePath()
+
+	// Determine templates directory (relative to executable)
+	execPath, _ := os.Executable()
+	templatesDir := filepath.Join(filepath.Dir(execPath), "..", "templates")
+	if _, err := os.Stat(templatesDir); os.IsNotExist(err) {
+		// Try relative to current directory
+		templatesDir = "templates"
+		if _, err := os.Stat(templatesDir); os.IsNotExist(err) {
+			templatesDir = "" // No templates available
+		}
+	}
+
+	// Initialize workspace using agent.InitWorkspace
+	if err := agent.EnsureWorkspace(workspace, templatesDir); err != nil {
+		fmt.Fprintf(os.Stderr, "Error initializing workspace: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✓ Initialized workspace at %s\n", workspace)
+
+	// List created files
+	if templatesDir != "" {
+		fmt.Println("  Created memory/")
+		fmt.Println("  Created memory/MEMORY.md")
+		fmt.Println("  Created memory/HISTORY.md")
+		fmt.Println("  Created sessions/")
+		fmt.Println("  Created skills/")
+		fmt.Println("  Created AGENTS.md (from template)")
+		fmt.Println("  Created SOUL.md (from template)")
+		fmt.Println("  Created USER.md (from template)")
+		fmt.Println("  Created TOOLS.md (from template)")
+	} else {
+		fmt.Println("  Created memory/")
+		fmt.Println("  Created memory/MEMORY.md")
+		fmt.Println("  Created memory/HISTORY.md")
+		fmt.Println("  Created sessions/")
+		fmt.Println("  Created skills/")
+	}
+
+	fmt.Println()
+	fmt.Println("🤖 nanobot-go is ready!")
+	fmt.Println()
+	fmt.Println("Next steps:")
+	fmt.Println("  1. Add your API key to ~/.nanobot-go/config.json")
+	fmt.Println("     Get one at: https://openrouter.ai/keys")
+	fmt.Println("  2. Chat: nanobot-go agent -m \"Hello!\"")
+	fmt.Println()
+	fmt.Println("Want Telegram/WhatsApp? See: https://github.com/HKUDS/nanobot#-chat-apps")
 }
 
 // ioDiscard is an io.Writer that discards all writes (used to silence slog).

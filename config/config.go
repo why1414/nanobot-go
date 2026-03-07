@@ -1,4 +1,4 @@
-// Package config provides configuration loading and management for nanobot.
+// Package config provides configuration loading and management for nanobot-go.
 package config
 
 import (
@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Config is the root configuration for nanobot.
+// Config is the root configuration for nanobot-go.
 type Config struct {
 	Agents   AgentsConfig    `json:"agents"`
 	Channels ChannelsConfig  `json:"channels"`
@@ -24,6 +24,7 @@ type AgentsConfig struct {
 // AgentDefaults holds default agent settings.
 type AgentDefaults struct {
 	Workspace        string  `json:"workspace"`
+	// Model format: provider/model-name (e.g., "copilot/gpt-5-mini", "openai/gpt-4")
 	Model            string  `json:"model"`
 	MaxTokens        int     `json:"maxTokens"`
 	Temperature      float64 `json:"temperature"`
@@ -32,25 +33,8 @@ type AgentDefaults struct {
 }
 
 // ProvidersConfig holds configuration for LLM providers.
-type ProvidersConfig struct {
-	Custom        ProviderConfig `json:"custom"`
-	Anthropic     ProviderConfig `json:"anthropic"`
-	OpenAI        ProviderConfig `json:"openai"`
-	OpenRouter    ProviderConfig `json:"openrouter"`
-	DeepSeek      ProviderConfig `json:"deepseek"`
-	Groq          ProviderConfig `json:"groq"`
-	Zhipu         ProviderConfig `json:"zhipu"`
-	DashScope     ProviderConfig `json:"dashscope"`
-	VLLM          ProviderConfig `json:"vllm"`
-	Gemini        ProviderConfig `json:"gemini"`
-	Moonshot      ProviderConfig `json:"moonshot"`
-	MiniMax       ProviderConfig `json:"minimax"`
-	AiHubMix      ProviderConfig `json:"aihubmix"`
-	SiliconFlow   ProviderConfig `json:"siliconflow"`
-	VolcEngine    ProviderConfig `json:"volcengine"`
-	OpenAICodex   ProviderConfig `json:"openaiCodex"`
-	GitHubCopilot ProviderConfig `json:"githubCopilot"`
-}
+// Provider names are keys (e.g., "custom", "openrouter", "openai").
+type ProvidersConfig map[string]ProviderConfig
 
 // ProviderConfig holds LLM provider configuration.
 type ProviderConfig struct {
@@ -61,34 +45,9 @@ type ProviderConfig struct {
 
 // ChannelsConfig holds configuration for chat channels.
 type ChannelsConfig struct {
-	SendProgress   bool            `json:"sendProgress"`
-	SendToolHints  bool            `json:"sendToolHints"`
-	WhatsApp       WhatsAppConfig  `json:"whatsapp"`
-	Telegram       TelegramConfig  `json:"telegram"`
-	Feishu         FeishuConfig    `json:"feishu"`
-	DingTalk       DingTalkConfig  `json:"dingtalk"`
-	Discord        DiscordConfig   `json:"discord"`
-	Email          EmailConfig     `json:"email"`
-	Mochat         MochatConfig    `json:"mochat"`
-	Slack          SlackConfig     `json:"slack"`
-	QQ             QQConfig        `json:"qq"`
-}
-
-// WhatsAppConfig holds WhatsApp channel configuration.
-type WhatsAppConfig struct {
-	Enabled     bool     `json:"enabled"`
-	BridgeURL   string   `json:"bridgeUrl"`
-	BridgeToken string   `json:"bridgeToken"`
-	AllowFrom   []string `json:"allowFrom"`
-}
-
-// TelegramConfig holds Telegram channel configuration.
-type TelegramConfig struct {
-	Enabled        bool     `json:"enabled"`
-	Token          string   `json:"token"`
-	AllowFrom      []string `json:"allowFrom"`
-	Proxy          string   `json:"proxy"`
-	ReplyToMessage bool     `json:"replyToMessage"`
+	SendProgress   bool          `json:"sendProgress"`
+	SendToolHints  bool          `json:"sendToolHints"`
+	Feishu         FeishuConfig  `json:"feishu"`
 }
 
 // FeishuConfig holds Feishu/Lark channel configuration.
@@ -99,114 +58,6 @@ type FeishuConfig struct {
 	EncryptKey         string   `json:"encryptKey"`
 	VerificationToken  string   `json:"verificationToken"`
 	AllowFrom          []string `json:"allowFrom"`
-}
-
-// DingTalkConfig holds DingTalk channel configuration.
-type DingTalkConfig struct {
-	Enabled      bool     `json:"enabled"`
-	ClientID     string   `json:"clientId"`
-	ClientSecret string   `json:"clientSecret"`
-	AllowFrom    []string `json:"allowFrom"`
-}
-
-// DiscordConfig holds Discord channel configuration.
-type DiscordConfig struct {
-	Enabled     bool     `json:"enabled"`
-	Token       string   `json:"token"`
-	AllowFrom   []string `json:"allowFrom"`
-	GatewayURL  string   `json:"gatewayUrl"`
-	Intents     int      `json:"intents"`
-}
-
-// EmailConfig holds Email channel configuration.
-type EmailConfig struct {
-	Enabled            bool     `json:"enabled"`
-	ConsentGranted     bool     `json:"consentGranted"`
-	IMAPHost           string   `json:"imapHost"`
-	IMAPPort           int      `json:"imapPort"`
-	IMAPUsername       string   `json:"imapUsername"`
-	IMAPPassword       string   `json:"imapPassword"`
-	IMAPMailbox        string   `json:"imapMailbox"`
-	IMAPUseSSL         bool     `json:"imapUseSSL"`
-	SMTPHost           string   `json:"smtpHost"`
-	SMTPPort           int      `json:"smtpPort"`
-	SMTPUsername       string   `json:"smtpUsername"`
-	SMTPPassword       string   `json:"smtpPassword"`
-	SMTPUseTLS         bool     `json:"smtpUseTls"`
-	SMTPUseSSL         bool     `json:"smtpUseSsl"`
-	FromAddress        string   `json:"fromAddress"`
-	AutoReplyEnabled   bool     `json:"autoReplyEnabled"`
-	PollIntervalSecs   int      `json:"pollIntervalSecs"`
-	MarkSeen           bool     `json:"markSeen"`
-	MaxBodyChars       int      `json:"maxBodyChars"`
-	SubjectPrefix      string   `json:"subjectPrefix"`
-	AllowFrom          []string `json:"allowFrom"`
-}
-
-// MochatMentionConfig holds Mochat mention behavior configuration.
-type MochatMentionConfig struct {
-	RequireInGroups bool `json:"requireInGroups"`
-}
-
-// MochatGroupRule holds Mochat per-group mention requirement.
-type MochatGroupRule struct {
-	RequireMention bool `json:"requireMention"`
-}
-
-// MochatConfig holds Mochat channel configuration.
-type MochatConfig struct {
-	Enabled                    bool                         `json:"enabled"`
-	BaseURL                    string                       `json:"baseUrl"`
-	SocketURL                  string                       `json:"socketUrl"`
-	SocketPath                 string                       `json:"socketPath"`
-	SocketDisableMsgpack       bool                         `json:"socketDisableMsgpack"`
-	SocketReconnectDelayMs     int                          `json:"socketReconnectDelayMs"`
-	SocketMaxReconnectDelayMs  int                          `json:"socketMaxReconnectDelayMs"`
-	SocketConnectTimeoutMs     int                          `json:"socketConnectTimeoutMs"`
-	RefreshIntervalMs          int                          `json:"refreshIntervalMs"`
-	WatchTimeoutMs             int                          `json:"watchTimeoutMs"`
-	WatchLimit                 int                          `json:"watchLimit"`
-	RetryDelayMs               int                          `json:"retryDelayMs"`
-	MaxRetryAttempts           int                          `json:"maxRetryAttempts"`
-	ClawToken                  string                       `json:"clawToken"`
-	AgentUserID                string                       `json:"agentUserId"`
-	Sessions                   []string                     `json:"sessions"`
-	Panels                     []string                     `json:"panels"`
-	AllowFrom                  []string                     `json:"allowFrom"`
-	Mention                    MochatMentionConfig          `json:"mention"`
-	Groups                     map[string]MochatGroupRule   `json:"groups"`
-	ReplyDelayMode             string                       `json:"replyDelayMode"`
-	ReplyDelayMs               int                          `json:"replyDelayMs"`
-}
-
-// SlackDMConfig holds Slack DM policy configuration.
-type SlackDMConfig struct {
-	Enabled   bool     `json:"enabled"`
-	Policy    string   `json:"policy"`
-	AllowFrom []string `json:"allowFrom"`
-}
-
-// SlackConfig holds Slack channel configuration.
-type SlackConfig struct {
-	Enabled        bool           `json:"enabled"`
-	Mode           string         `json:"mode"`
-	WebhookPath    string         `json:"webhookPath"`
-	BotToken       string         `json:"botToken"`
-	AppToken       string         `json:"appToken"`
-	UserTokenReadOnly bool        `json:"userTokenReadOnly"`
-	ReplyInThread  bool           `json:"replyInThread"`
-	ReactEmoji     string         `json:"reactEmoji"`
-	GroupPolicy    string         `json:"groupPolicy"`
-	GroupAllowFrom []string       `json:"groupAllowFrom"`
-	DM             SlackDMConfig  `json:"dm"`
-}
-
-// QQConfig holds QQ channel configuration.
-type QQConfig struct {
-	Enabled   bool     `json:"enabled"`
-	AppID     string   `json:"appId"`
-	Secret    string   `json:"secret"`
-	AllowFrom []string `json:"allowFrom"`
 }
 
 // HeartbeatConfig holds heartbeat service configuration.
@@ -250,7 +101,6 @@ type MCPServerConfig struct {
 
 // ToolsConfig holds tools configuration.
 type ToolsConfig struct {
-	Web                WebToolsConfig            `json:"web"`
 	Exec               ExecToolConfig            `json:"exec"`
 	RestrictToWorkspace bool                      `json:"restrictToWorkspace"`
 	MCPServers         map[string]MCPServerConfig `json:"mcpServers"`
@@ -261,8 +111,8 @@ func DefaultConfig() *Config {
 	return &Config{
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{
-				Workspace:         "~/.nanobot/workspace",
-				Model:             "anthropic/claude-opus-4-5",
+				Workspace:         "~/.nanobot-go/workspace",
+				Model:             "",
 				MaxTokens:         8192,
 				Temperature:       0.1,
 				MaxToolIterations: 40,
@@ -273,8 +123,13 @@ func DefaultConfig() *Config {
 			SendProgress:  true,
 			SendToolHints: false,
 		},
+		Providers: ProvidersConfig{
+			"custom": {
+				APIBase: "http://localhost:4141/v1",
+			},
+		},
 		Gateway: GatewayConfig{
-			Host: "0.0.0.0",
+			Host: "localhost",
 			Port: 18790,
 			Heartbeat: HeartbeatConfig{
 				Enabled:   true,

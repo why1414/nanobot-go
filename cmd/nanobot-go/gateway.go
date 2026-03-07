@@ -29,7 +29,7 @@ func (s *stringSliceFlag) Set(v string) error { *s = append(*s, v); return nil }
 // runGateway implements the "gateway" subcommand.
 func runGateway(args []string) {
 	fs := flag.NewFlagSet("gateway", flag.ExitOnError)
-	configPath := fs.String("config", "", "Path to config file (default: ~/.nanobot/config.json)")
+	configPath := fs.String("config", "", "Path to config file (default: ~/.nanobot-go/config.json)")
 	port := fs.Int("port", 0, "Gateway port (overrides config)")
 	model := fs.String("model", "", "LLM model name (overrides config)")
 	apiKey := fs.String("api-key", "", "API key (overrides config)")
@@ -47,7 +47,7 @@ func runGateway(args []string) {
 	fs.Var(&feishuAllow, "feishu-allow", "Allowed Feishu sender IDs (repeat flag for multiple)")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: nanobot gateway [flags]\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, "Usage: nanobot-go gateway [flags]\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -92,16 +92,11 @@ func runGateway(args []string) {
 	apiKeyValue := cfg.GetAPIKey(modelName)
 	apiBaseValue := cfg.GetAPIBase(modelName)
 
+	// Log current model configuration
+	slog.Info("model configuration", "model", modelName, "apiBase", apiBaseValue)
+
 	// Create provider
-	p, err := provider.NewProvider(provider.ProviderConfig{
-		APIKey:  apiKeyValue,
-		APIBase: apiBaseValue,
-		Model:   modelName,
-	})
-	if err != nil {
-		slog.Error("failed to create provider", "error", err)
-		os.Exit(1)
-	}
+	p := provider.NewOpenAICompatProvider(apiKeyValue, apiBaseValue, modelName)
 
 	// Initialize tools
 	tools := tool.NewToolRegistry()
@@ -115,27 +110,28 @@ func runGateway(args []string) {
 	cronService := cron.NewCronService(filepath.Join(workspaceDir, "cron.json"), nil)
 	tools.Register(tool.NewCronTool(cronService))
 
+	// Initialize workspace (ensure directories and files exist)
+	if err := agent.EnsureWorkspace(workspaceDir, ""); err != nil {
+		slog.Warn("failed to initialize workspace", "error", err)
+	}
+
 	// Initialize skills loader
 	skillsLoader := agent.NewSkillsLoader(workspaceDir, "")
 
 	// Initialize memory store
 	memoryStore := agent.NewMemoryStore(workspaceDir)
 
-	// Build system prompt
-	systemPrompt := agent.BuildSystemPrompt(workspaceDir, skillsLoader, memoryStore)
-
 	// Create message bus
 	mb := bus.NewMessageBus(32)
 
 	// Create agent loop
 	agentLoop := agent.NewAgentLoop(mb, p, tools, agent.AgentOptions{
-		SystemPrompt: systemPrompt,
 		Model:        modelName,
 		MaxIter:      cfg.Agents.Defaults.MaxToolIterations,
 		Temperature:  cfg.Agents.Defaults.Temperature,
 		MaxTokens:    cfg.Agents.Defaults.MaxTokens,
 		MemoryWindow: cfg.Agents.Defaults.MemoryWindow,
-	}, memoryStore)
+	}, memoryStore, skillsLoader, workspaceDir)
 
 	// Initialize channels
 	cliCh := channel.NewCLIChannel(mb)

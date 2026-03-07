@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 )
 
 // DefaultSystemPrompt is the built-in default system prompt.
@@ -17,106 +19,142 @@ When using tools:
 
 Be concise and helpful in your responses.`
 
+// BootstrapFiles are loaded from workspace in order.
+var BootstrapFiles = []string{"AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"}
+
 // SystemPromptBuilder builds the system prompt from multiple sources.
 type SystemPromptBuilder struct {
-	workspace       string
-	skillsLoader    *SkillsLoader
-	memoryStore     *MemoryStore
+	workspace      string
+	skillsLoader   *SkillsLoader
+	memoryStore    *MemoryStore
+	bootstrapFiles []string
 }
 
 // NewSystemPromptBuilder creates a new SystemPromptBuilder.
 func NewSystemPromptBuilder(workspace string, skillsLoader *SkillsLoader, memoryStore *MemoryStore) *SystemPromptBuilder {
 	return &SystemPromptBuilder{
-		workspace:    workspace,
-		skillsLoader: skillsLoader,
-		memoryStore:  memoryStore,
+		workspace:      workspace,
+		skillsLoader:   skillsLoader,
+		memoryStore:    memoryStore,
+		bootstrapFiles: BootstrapFiles,
 	}
 }
 
 // Build constructs the full system prompt.
-// It combines: built-in prompt + workspace file + skills + memory.
+// It combines: core identity + bootstrap files + skills + memory.
 func (b *SystemPromptBuilder) Build() string {
 	var parts []string
 
-	// 1. Base system prompt from file or default
-	basePrompt := b.loadWorkspacePrompt()
-	if basePrompt == "" {
-		basePrompt = DefaultSystemPrompt
+	// 1. Core identity (time, runtime, workspace info)
+	parts = append(parts, b.buildCoreIdentity())
+
+	// 2. Bootstrap files (AGENTS.md, SOUL.md, USER.md, TOOLS.md, IDENTITY.md)
+	bootstrap := b.loadBootstrapFiles()
+	if bootstrap != "" {
+		parts = append(parts, bootstrap)
 	}
-	parts = append(parts, basePrompt)
 
-	// 2. Skills summary (for progressive loading)
+	// 3. Skills - progressive loading
 	if b.skillsLoader != nil {
-		skillsSummary := b.skillsLoader.BuildSkillsSummary()
-		if skillsSummary != "" {
-			parts = append(parts, "\n\n## Available Skills\n\n"+skillsSummary)
-		}
-
-		// Load always-active skills
+		// Always-loaded skills: full content
 		alwaysSkills := b.skillsLoader.GetAlwaysSkills()
 		if len(alwaysSkills) > 0 {
 			alwaysContent := b.skillsLoader.LoadSkillsForContext(alwaysSkills)
 			if alwaysContent != "" {
-				parts = append(parts, "\n\n## Active Skills\n\n"+alwaysContent)
+				parts = append(parts, "# Active Skills\n\n"+alwaysContent)
 			}
+		}
+
+		// All skills: summary only
+		skillsSummary := b.skillsLoader.BuildSkillsSummary()
+		if skillsSummary != "" {
+			skillsSection := fmt.Sprintf(`# Skills
+
+The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
+Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
+
+%s`, skillsSummary)
+			parts = append(parts, skillsSection)
 		}
 	}
 
-	// 3. Memory context
+	// 4. Memory context
 	if b.memoryStore != nil {
 		memoryCtx := b.memoryStore.GetMemoryContext()
 		if memoryCtx != "" {
-			parts = append(parts, "\n\n"+memoryCtx)
+			parts = append(parts, "# Memory\n\n"+memoryCtx)
 		}
 	}
 
-	return strings.Join(parts, "")
+	return strings.Join(parts, "\n\n---\n\n")
 }
 
-// loadWorkspacePrompt loads the system prompt from AGENT.md or SYSTEM.md in the workspace.
-func (b *SystemPromptBuilder) loadWorkspacePrompt() string {
-	// Try AGENT.md first
-	if content, err := os.ReadFile(filepath.Join(b.workspace, "AGENT.md")); err == nil {
-		return string(content)
+// buildCoreIdentity builds the core identity section with runtime info.
+func (b *SystemPromptBuilder) buildCoreIdentity() string {
+	now := time.Now()
+	nowStr := now.Format("2006-01-02 15:04 (Monday)")
+	_, offset := now.Zone()
+	tz := fmt.Sprintf("UTC%+d", offset/3600)
+	if name, _ := now.Zone(); name != "" {
+		tz = name
 	}
 
-	// Try SYSTEM.md
-	if content, err := os.ReadFile(filepath.Join(b.workspace, "SYSTEM.md")); err == nil {
-		return string(content)
+	workspacePath := b.workspace
+	if abs, err := filepath.Abs(b.workspace); err == nil {
+		workspacePath = abs
 	}
 
-	return ""
+	osName := runtime.GOOS
+	if osName == "darwin" {
+		osName = "macOS"
+	}
+	runtimeInfo := fmt.Sprintf("%s %s, Go %s", osName, runtime.GOARCH, runtime.Version()[2:])
+
+	return fmt.Sprintf(`# nanobot 🐈
+
+You are nanobot, a helpful AI assistant.
+
+## Current Time
+%s (%s)
+
+## Runtime
+%s
+
+## Workspace
+Your workspace is at: %s
+- Long-term memory: %s/memory/MEMORY.md
+- History log: %s/memory/HISTORY.md (grep-searchable)
+- Custom skills: %s/skills/{skill-name}/SKILL.md
+
+Reply directly with text for conversations. Only use the 'message' tool to send to a specific chat channel.
+
+## Tool Call Guidelines
+- Before calling tools, you may briefly state your intent (e.g. "Let me check that"), but NEVER predict or describe the expected result before receiving it.
+- Before modifying a file, read it first to confirm its current content.
+- Do not assume a file or directory exists — use list_dir or read_file to verify.
+- After writing or editing a file, re-read it if accuracy matters.
+- If a tool call fails, analyze the error before retrying with a different approach.
+
+## Memory
+- Remember important facts: write to %s/memory/MEMORY.md
+- Recall past events: grep %s/memory/HISTORY.md`, nowStr, tz, runtimeInfo, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath, workspacePath)
 }
 
-// LoadSystemPrompt loads the system prompt from the workspace directory.
-// Returns the content of AGENT.md or SYSTEM.md if found, otherwise returns empty string.
-func LoadSystemPrompt(workspace string) string {
-	// Try AGENT.md first
-	if content, err := os.ReadFile(filepath.Join(workspace, "AGENT.md")); err == nil {
-		return string(content)
+// loadBootstrapFiles loads all bootstrap files from workspace.
+func (b *SystemPromptBuilder) loadBootstrapFiles() string {
+	var parts []string
+
+	for _, filename := range b.bootstrapFiles {
+		filePath := filepath.Join(b.workspace, filename)
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			continue
+		}
+		text := strings.TrimSpace(string(content))
+		if text != "" {
+			parts = append(parts, fmt.Sprintf("## %s\n\n%s", filename, text))
+		}
 	}
 
-	// Try SYSTEM.md
-	if content, err := os.ReadFile(filepath.Join(workspace, "SYSTEM.md")); err == nil {
-		return string(content)
-	}
-
-	return ""
-}
-
-// BuildSystemPrompt builds a system prompt from workspace file, skills, and memory.
-// This is a convenience function for simple use cases.
-func BuildSystemPrompt(workspace string, skillsLoader *SkillsLoader, memoryStore *MemoryStore) string {
-	builder := NewSystemPromptBuilder(workspace, skillsLoader, memoryStore)
-	return builder.Build()
-}
-
-// FormatTimestamp formats a timestamp for the given time.
-func FormatTimestamp(t interface{}) string {
-	switch v := t.(type) {
-	case string:
-		return v
-	default:
-		return fmt.Sprintf("%v", t)
-	}
+	return strings.Join(parts, "\n\n")
 }

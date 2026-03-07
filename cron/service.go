@@ -1,4 +1,4 @@
-// Package cron provides cron job scheduling for nanobot.
+// Package cron provides cron job scheduling for nanobot-go.
 package cron
 
 import (

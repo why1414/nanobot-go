@@ -54,23 +54,27 @@ func (o *AgentOptions) withDefaults() AgentOptions {
 //  4. Executes tool calls and feeds results back to the LLM.
 //  5. Publishes the final response to the outbound bus.
 type AgentLoop struct {
-	bus         *bus.MessageBus
-	provider    provider.LLMProvider
-	tools       *tool.ToolRegistry
-	sessions    *SessionManager
-	opts        AgentOptions
-	memoryStore *MemoryStore
+	bus          *bus.MessageBus
+	provider     provider.LLMProvider
+	tools        *tool.ToolRegistry
+	sessions     *SessionManager
+	opts         AgentOptions
+	memoryStore  *MemoryStore
+	skillsLoader *SkillsLoader
+	workspace    string
 }
 
 // NewAgentLoop creates an AgentLoop.
-func NewAgentLoop(b *bus.MessageBus, p provider.LLMProvider, tools *tool.ToolRegistry, opts AgentOptions, memoryStore *MemoryStore) *AgentLoop {
+func NewAgentLoop(b *bus.MessageBus, p provider.LLMProvider, tools *tool.ToolRegistry, opts AgentOptions, memoryStore *MemoryStore, skillsLoader *SkillsLoader, workspace string) *AgentLoop {
 	return &AgentLoop{
-		bus:         b,
-		provider:    p,
-		tools:       tools,
-		sessions:    NewSessionManager(),
-		opts:        opts.withDefaults(),
-		memoryStore: memoryStore,
+		bus:          b,
+		provider:     p,
+		tools:        tools,
+		sessions:     NewSessionManager(workspace),
+		opts:         opts.withDefaults(),
+		memoryStore:  memoryStore,
+		skillsLoader: skillsLoader,
+		workspace:    workspace,
 	}
 }
 
@@ -127,7 +131,9 @@ func (l *AgentLoop) ProcessMessage(ctx context.Context, msg *bus.InboundMessage)
 
 	history := l.sessions.GetHistory(sessionKey, l.opts.MemoryWindow)
 
-	messages := BuildMessages(l.opts.systemPrompt(), history, msg.Content)
+	// Build system prompt using SystemPromptBuilder
+	systemPrompt := l.buildSystemPrompt()
+	messages := BuildMessages(systemPrompt, history, msg.Content)
 
 	finalContent, newMessages, err := l.runReActLoop(ctx, messages)
 	if err != nil {
@@ -302,4 +308,10 @@ func (o *AgentOptions) modelName(p provider.LLMProvider) string {
 
 func (o *AgentOptions) systemPrompt() string {
 	return o.SystemPrompt
+}
+
+// buildSystemPrompt builds the system prompt using the SystemPromptBuilder.
+func (l *AgentLoop) buildSystemPrompt() string {
+	builder := NewSystemPromptBuilder(l.workspace, l.skillsLoader, l.memoryStore)
+	return builder.Build()
 }

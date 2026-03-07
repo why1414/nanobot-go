@@ -1,5 +1,5 @@
 // Package channel defines the Channel interface and BaseChannel helper for
-// integrating chat platforms with the nanobot message bus.
+// integrating chat platforms with the nanobot-go message bus.
 package channel
 
 import (

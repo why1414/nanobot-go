@@ -1,9 +1,10 @@
 // Package provider — OpenAI-compatible HTTP provider.
 //
 // OpenAICompatProvider implements LLMProvider by speaking directly to any
-// standard OpenAI-format /chat/completions endpoint (n=1, single choice).
-// For non-standard proxies that split content and tool_calls across multiple
-// choices (e.g. GitHub Copilot Proxy), use CopilotProvider instead.
+// standard OpenAI-format /chat/completions endpoint.
+// It handles both standard single-choice responses and non-standard multi-choice
+// responses (e.g., GitHub Copilot Proxy splitting content and tool_calls across
+// multiple choices).
 package provider
 
 import (
@@ -57,8 +58,9 @@ func (p *OpenAICompatProvider) WithExtraHeaders(headers map[string]string) *Open
 }
 
 // DefaultModel implements LLMProvider.
+// Returns the model name without provider prefix.
 func (p *OpenAICompatProvider) DefaultModel() string {
-	return p.defaultModel
+	return parseModelName(p.defaultModel)
 }
 
 // Chat implements LLMProvider.
@@ -67,6 +69,9 @@ func (p *OpenAICompatProvider) Chat(ctx context.Context, messages []Message, opt
 	if model == "" {
 		model = p.defaultModel
 	}
+
+	// Strip provider prefix if present (e.g., "custom/gpt-4" -> "gpt-4")
+	model = parseModelName(model)
 
 	maxTokens := opts.MaxTokens
 	if maxTokens <= 0 {
@@ -288,7 +293,20 @@ func parseResponse(body []byte) (*LLMResponse, error) {
 		return nil, fmt.Errorf("provider: response has no choices")
 	}
 
-	// Standard OpenAI-compatible APIs always return n=1 choices; take choices[0].
+	// Standard OpenAI-compatible APIs return n=1 choices.
+	// Non-standard proxies (e.g., Copilot Proxy) may split content and tool_calls
+	// across multiple choices, so we merge all choices to handle both cases.
+	if len(raw.Choices) == 1 {
+		// Fast path: standard single-choice response
+		return parseSingleChoice(&raw)
+	}
+
+	// Slow path: merge multiple choices (compatibility with non-standard proxies)
+	return parseMultipleChoices(&raw)
+}
+
+// parseSingleChoice handles the standard single-choice response.
+func parseSingleChoice(raw *openaiResponse) (*LLMResponse, error) {
 	choice := raw.Choices[0]
 	msg := choice.Message
 
@@ -343,6 +361,84 @@ func parseResponse(body []byte) (*LLMResponse, error) {
 	}, nil
 }
 
+// parseMultipleChoices merges all choices into a single LLMResponse.
+// This handles non-standard proxies that split content and tool_calls across
+// multiple choices (e.g., Copilot Proxy sending content in choices[0] and
+// tool_calls in choices[1]).
+func parseMultipleChoices(raw *openaiResponse) (*LLMResponse, error) {
+	var (
+		mergedContent  *string
+		mergedRawCalls []openaiTCall
+		finishReason   string
+		reasoning      *string
+	)
+
+	for _, choice := range raw.Choices {
+		msg := choice.Message
+
+		// Accumulate content — pick the first non-nil content.
+		if mergedContent == nil && msg.Content != nil {
+			mergedContent = msg.Content
+		}
+
+		// Accumulate tool calls from all choices.
+		mergedRawCalls = append(mergedRawCalls, msg.ToolCalls...)
+
+		// Prefer "tool_calls" finish_reason over "stop" since it indicates
+		// tools must be executed.
+		if choice.FinishReason == "tool_calls" || finishReason == "" {
+			finishReason = choice.FinishReason
+		}
+
+		if reasoning == nil {
+			if msg.ReasoningContent != nil {
+				reasoning = msg.ReasoningContent
+			} else if msg.Reasoning != nil {
+				reasoning = msg.Reasoning
+			}
+		}
+	}
+
+	if finishReason == "" {
+		finishReason = "stop"
+	}
+
+	toolCalls := make([]ToolCallRequest, 0, len(mergedRawCalls))
+	for _, tc := range mergedRawCalls {
+		args, err := parseArguments(tc.Function.Arguments)
+		if err != nil {
+			args = map[string]any{}
+		}
+		toolCalls = append(toolCalls, ToolCallRequest{
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			Arguments: args,
+		})
+	}
+
+	slog.Info("provider: merged multiple choices", "count", len(raw.Choices), "tool_calls", len(toolCalls))
+
+	usage := map[string]int{}
+	if raw.Usage != nil {
+		usage["prompt_tokens"] = raw.Usage.PromptTokens
+		usage["completion_tokens"] = raw.Usage.CompletionTokens
+		usage["total_tokens"] = raw.Usage.TotalTokens
+	}
+
+	if finishReason == "tool_calls" && len(toolCalls) == 0 {
+		slog.Warn("provider: finish_reason=tool_calls but no tool_calls parsed; check raw response",
+			"raw_tool_calls", len(mergedRawCalls))
+	}
+
+	return &LLMResponse{
+		Content:          mergedContent,
+		ToolCalls:        toolCalls,
+		FinishReason:     finishReason,
+		Usage:            usage,
+		ReasoningContent: reasoning,
+	}, nil
+}
+
 // parseArguments decodes a JSON string into map[string]any.
 // It attempts to repair common truncation issues (missing closing brackets).
 func parseArguments(raw string) (map[string]any, error) {
@@ -374,4 +470,18 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// parseModelName extracts the model name from a provider/model format.
+// If the model contains a "/", it returns the part after the "/".
+// Otherwise, it returns the model as-is.
+// Examples:
+//   - "custom/gpt-5-mini" -> "gpt-5-mini"
+//   - "openai/gpt-4" -> "gpt-4"
+//   - "gpt-4" -> "gpt-4"
+func parseModelName(model string) string {
+	if idx := strings.Index(model, "/"); idx >= 0 {
+		return model[idx+1:]
+	}
+	return model
 }
