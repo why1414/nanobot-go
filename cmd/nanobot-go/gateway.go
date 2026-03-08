@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,31 +19,10 @@ import (
 	"github.com/libo/nanobot-go/tool"
 )
 
-// stringSliceFlag allows a flag to be specified multiple times.
-type stringSliceFlag []string
-
-func (s *stringSliceFlag) String() string  { return strings.Join(*s, ",") }
-func (s *stringSliceFlag) Set(v string) error { *s = append(*s, v); return nil }
-
 // runGateway implements the "gateway" subcommand.
 func runGateway(args []string) {
 	fs := flag.NewFlagSet("gateway", flag.ExitOnError)
 	configPath := fs.String("config", "", "Path to config file (default: ~/.nanobot-go/config.json)")
-	port := fs.Int("port", 0, "Gateway port (overrides config)")
-	model := fs.String("model", "", "LLM model name (overrides config)")
-	apiKey := fs.String("api-key", "", "API key (overrides config)")
-	apiBase := fs.String("api-base", "", "API base URL (overrides config)")
-	workspace := fs.String("workspace", "", "Workspace directory (overrides config)")
-	maxIter := fs.Int("max-iter", 0, "Max agent iterations per message (overrides config)")
-	temp := fs.Float64("temp", 0, "Sampling temperature (overrides config)")
-	maxTokens := fs.Int("max-tokens", 0, "Max response tokens (overrides config)")
-
-	// Feishu channel flags (override config)
-	feishuAppID := fs.String("feishu-app-id", "", "Feishu App ID (overrides config)")
-	feishuAppSecret := fs.String("feishu-app-secret", "", "Feishu App Secret (overrides config)")
-	feishuEncryptKey := fs.String("feishu-encrypt-key", "", "Feishu Encrypt Key (overrides config)")
-	var feishuAllow stringSliceFlag
-	fs.Var(&feishuAllow, "feishu-allow", "Allowed Feishu sender IDs (repeat flag for multiple)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: nanobot-go gateway [flags]\n\nFlags:\n")
@@ -61,28 +39,8 @@ func runGateway(args []string) {
 		os.Exit(1)
 	}
 
-	// Apply CLI overrides
-	cfg.MergeFlags(*model, *apiKey, *apiBase, *workspace, *maxIter, *temp, *maxTokens)
-
-	// Apply Feishu overrides
-	if *feishuAppID != "" {
-		cfg.Channels.Feishu.AppID = *feishuAppID
-	}
-	if *feishuAppSecret != "" {
-		cfg.Channels.Feishu.AppSecret = *feishuAppSecret
-	}
-	if *feishuEncryptKey != "" {
-		cfg.Channels.Feishu.EncryptKey = *feishuEncryptKey
-	}
-	if len(feishuAllow) > 0 {
-		cfg.Channels.Feishu.AllowFrom = feishuAllow
-	}
-
 	// Gateway port
 	gatewayPort := cfg.Gateway.Port
-	if *port > 0 {
-		gatewayPort = *port
-	}
 
 	// Determine workspace
 	workspaceDir := cfg.WorkspacePath()

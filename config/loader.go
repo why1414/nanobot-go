@@ -140,36 +140,3 @@ func (c *Config) GetModel() string {
 	return c.Agents.Defaults.Model
 }
 
-// MergeFlags merges CLI flag values into the config.
-// Non-empty flag values override config file values.
-func (c *Config) MergeFlags(model, apiKey, apiBase, workspace string, maxIter int, temp float64, maxTokens int) {
-	if model != "" {
-		c.Agents.Defaults.Model = model
-	}
-	if apiKey != "" || apiBase != "" {
-		// Store in custom provider config
-		if c.Providers == nil {
-			c.Providers = make(map[string]ProviderConfig)
-		}
-		custom := c.Providers["custom"]
-		if apiKey != "" {
-			custom.APIKey = apiKey
-		}
-		if apiBase != "" {
-			custom.APIBase = apiBase
-		}
-		c.Providers["custom"] = custom
-	}
-	if workspace != "" {
-		c.Agents.Defaults.Workspace = workspace
-	}
-	if maxIter > 0 {
-		c.Agents.Defaults.MaxToolIterations = maxIter
-	}
-	if temp > 0 {
-		c.Agents.Defaults.Temperature = temp
-	}
-	if maxTokens > 0 {
-		c.Agents.Defaults.MaxTokens = maxTokens
-	}
-}

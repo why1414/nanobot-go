@@ -2,51 +2,29 @@
 
 [English](README.en.md) | 中文
 
-NanoBot 的 Go 语言完整实现 — 一个轻量级的、支持工具调用的 AI Agent，兼容任何 OpenAI API 格式的 LLM 端点。
+[NanoBot](https://github.com/libo/nanobot) 的 Go 语言完整实现 — 一个轻量级的、支持工具调用的 AI Agent，兼容任何 OpenAI API 格式的 LLM 端点。
 
-## ✨ 特性
+## ✨ 核心特性
 
-| 状态 | 功能 |
-|------|------|
-| ✅ | OpenAI 兼容的 Provider（直接 HTTP 调用，无需 SDK） |
-| ✅ | 工具系统 — shell 执行、文件读写/编辑/列表 |
-| ✅ | ReAct Agent 循环，支持多轮会话历史 |
-| ✅ | CLI 通道（标准输入/输出） |
-| ✅ | Gateway 子命令（多通道服务器） |
-| ✅ | Feishu/Lark 通道（WebSocket 长连接，无需公网 IP） |
-| ✅ | 配置文件支持（JSON 格式） |
-| ✅ | Memory / Session 持久化（磁盘存储） |
-| ✅ | Cron / Heartbeat 服务 |
-| ✅ | Skills 系统（渐进式加载，支持依赖检查） |
-| ✅ | 系统提示词模板（AGENTS.md, SOUL.md, USER.md, TOOLS.md） |
-| ✅ | 两层记忆系统（MEMORY.md + HISTORY.md） |
-| ☐ | Docker 支持 |
-| ☐ | Multi-agent 编排 |
+- **OpenAI 兼容 Provider** — 直接 HTTP 调用，无需 SDK，支持 OpenRouter、本地代理等
+- **长期记忆系统** — 两层记忆架构（MEMORY.md + HISTORY.md），自动 consolidation
+- **Skills 扩展** — 渐进式加载，支持依赖检查和自定义能力
+- **系统提示词模板** — 支持 AGENTS.md、SOUL.md、USER.md、TOOLS.md 等模板文件
 
 ---
 
-## 📦 包结构
+## 📦 项目结构
 
-| 包 | 文件 | 功能 |
-|----|------|------|
-| `provider` | `interface.go` | 核心类型：`Message`, `LLMResponse`, `LLMProvider` 接口 |
-| `provider` | `openai_compat.go` | 直接 HTTP 调用的 OpenAI 兼容 Provider |
-| `bus` | `bus.go` | `MessageBus`：使用带缓冲的 Go channel 处理入站/出站消息 |
-| `tool` | `tool.go` | `Tool` 接口 + `ToolRegistry`（注册/获取/执行） |
-| `tool` | `shell.go` | `ShellTool`（"exec"）：运行 `sh -c` 命令，支持超时，捕获 stdout+stderr |
-| `tool` | `filesystem.go` | 文件工具：`ReadFileTool`, `WriteFileTool`, `EditFileTool`, `ListDirTool` |
-| `agent` | `session.go` | Session 管理：`SessionMessage`, `Session`, `SessionManager`（JSONL 持久化） |
-| `agent` | `memory.go` | 记忆系统：`MemoryStore`（MEMORY.md + HISTORY.md） |
-| `agent` | `skills.go` | Skills 加载器：渐进式加载，支持 YAML frontmatter 和依赖检查 |
-| `agent` | `prompt.go` | 系统提示词构建器：核心身份 + bootstrap 文件 + skills + memory |
-| `agent` | `context.go` | 消息构建辅助函数：`BuildMessages`, `AddAssistantMessage`, `AddToolResult` |
-| `agent` | `loop.go` | `AgentLoop`：`Run(ctx)`, `ProcessMessage`, `runReActLoop` |
-| `agent` | `init.go` | Workspace 初始化：创建目录和默认文件 |
-| `channel` | `channel.go` | `Channel` 接口 + `BaseChannel`（白名单、`HandleMessage`） |
-| `channel` | `cli.go` | `CLIChannel`：标准输入循环、spinner、`/new` `/exit` `/quit` 命令 |
-| `channel` | `feishu.go` | `FeishuChannel`：通过 WebSocket 长连接接入飞书/Lark 机器人 |
-| `cmd/nanobot-go` | `main.go` | 入口点：解析命令行参数，组装 provider + bus + agent + channel |
-| `cmd/nanobot-go` | `gateway.go` | `gateway` 子命令：多通道服务器（CLI + Feishu） |
+- **`provider/`** — LLM Provider 实现（OpenAI 兼容）
+- **`agent/`** — Agent 核心逻辑（ReAct 循环、记忆、Skills、会话管理）
+- **`bus/`** — 消息总线（Channel 间通信）
+- **`channel/`** — 通道接口（CLI、Feishu/Lark）
+- **`tool/`** — 工具系统（Shell、文件系统操作）
+- **`config/`** — 配置文件解析
+- **`cron/`** — 定时任务服务
+- **`skills/`** — 内置 Skills（memory、cron）
+- **`templates/`** — 系统提示词模板文件
+- **`cmd/nanobot-go/`** — 程序入口（main、gateway）
 
 ---
 
@@ -289,102 +267,14 @@ requires:
 
 ---
 
-## 📋 完整命令行参数
+## 📋 命令行参数
 
-### Agent / 单条消息模式
+所有配置项（模型、API、Workspace、Feishu 凭证等）均在 `config.json` 中设置。
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `-model` | 配置文件中的值 | LLM 模型名称（格式：provider/model-name） |
-| `-api-key` | 配置文件中的值 | API 密钥 |
-| `-api-base` | 配置文件中的值 | API Base URL |
-| `-workspace` | 配置文件中的值 | Workspace 目录（工具沙箱根目录） |
-| `-max-iter` | `40` | 每条消息的最大 Agent 迭代次数 |
-| `-temp` | `0.1` | 采样温度 |
-| `-max-tokens` | `8192` | 最大响应 tokens |
-| `-m` | — | 单条消息（非交互模式） |
 | `-config` | `~/.nanobot-go/config.json` | 配置文件路径 |
-
-### Gateway 子命令
-
-包含以上所有参数，以及：
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `-port` | `18790` | Gateway 端口 |
-| `-feishu-app-id` | — | Feishu App ID |
-| `-feishu-app-secret` | — | Feishu App Secret |
-| `-feishu-encrypt-key` | — | Feishu Encrypt Key |
-| `-feishu-allow` | _(所有)_ | 允许的发送者 open IDs（可重复指定） |
-
----
-
-## 🔧 使用特定的 Provider
-
-```go
-// OpenRouter（通过 "sk-or-" 密钥前缀自动检测）
-p, _ := provider.NewProvider(provider.ProviderConfig{
-    APIKey: "sk-or-v1-...",
-    Model:  "anthropic/claude-opus-4-6",
-})
-
-// DeepSeek（通过 model 关键字自动检测）
-p, _ := provider.NewProvider(provider.ProviderConfig{
-    APIKey: "sk-...",
-    Model:  "deepseek-chat",
-})
-
-// 自定义 / 本地服务器
-p, _ := provider.NewProvider(provider.ProviderConfig{
-    ProviderName: "custom",
-    APIBase:      "http://localhost:8000/v1",
-    APIKey:       "no-key",
-    Model:        "my-local-model",
-})
-
-// 额外请求头（例如 OpenRouter site 跟踪）
-p, _ := provider.NewProvider(provider.ProviderConfig{
-    APIKey: "sk-or-...",
-    Model:  "openai/gpt-4o",
-    ExtraHeaders: map[string]string{
-        "HTTP-Referer": "https://myapp.example",
-        "X-Title":      "My App",
-    },
-})
-```
-
----
-
-## 🧪 运行测试
-
-```bash
-go test ./...
-```
-
-所有测试都使用 `httptest.NewServer` 模拟 HTTP 端点 — 不会发起真实的 API 调用。
-
----
-
-## 🔄 与 Python nanobot 的对应关系
-
-| Python | Go |
-|--------|----|
-| `providers/base.py` | `provider/interface.go` |
-| `providers/registry.py` | `provider/registry.go` |
-| `providers/custom_provider.py` | `provider/openai_compat.go` |
-| `providers/litellm_provider.py` | `provider/factory.go` + `openai_compat.go` |
-| `bus/events.py` + `queue.py` | `bus/bus.go` |
-| `agent/tools/base.py` + `registry.py` | `tool/tool.go` |
-| `agent/tools/shell.py` | `tool/shell.go` |
-| `agent/tools/filesystem.py` | `tool/filesystem.go` |
-| `agent/loop.py` | `agent/loop.go` + `context.go` + `session.go` |
-| `agent/memory.py` | `agent/memory.go` |
-| `agent/skills.py` | `agent/skills.go` |
-| `agent/context.py` | `agent/prompt.go` + `agent/init.go` |
-| `channels/base.py` | `channel/channel.go` |
-| `channels/cli.py` | `channel/cli.go` |
-| `channels/feishu.py` | `channel/feishu.go` |
-| `cli/commands.py` (agent cmd) | `cmd/nanobot-go/main.go` + `gateway.go` |
+| `-m` | — | 单条消息模式（非交互） |
 
 ---
 

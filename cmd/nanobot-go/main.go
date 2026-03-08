@@ -9,16 +9,6 @@
 // Agent flags:
 //
 //	-m, --message string      Single message to send (non-interactive)
-//	-s, --session string      Session ID (default: cli:direct)
-//	--no-markdown             Disable Markdown rendering of responses
-//	--logs                    Show runtime logs during chat
-//	--model string            LLM model (overrides config)
-//	--api-key string          API key (or set env: ANTHROPIC_API_KEY, etc.)
-//	--api-base string         API base URL (overrides config)
-//	--workspace string        Workspace directory (overrides config)
-//	--max-iter int            Max agent iterations per message (overrides config)
-//	--temp float              Sampling temperature (overrides config)
-//	--max-tokens int          Max response tokens (overrides config)
 //	--config string           Path to config file (default: ~/.nanobot-go/config.json)
 //
 // Onboard flags:
@@ -73,43 +63,18 @@ func main() {
 
 // agentFlags holds parsed flags for the agent subcommand.
 type agentFlags struct {
-	message   string
-	sessionID string
-	markdown  bool
-	logs      bool
-	config    string
-	// Override flags (empty means use config value)
-	model     string
-	apiKey    string
-	apiBase   string
-	workspace string
-	maxIter   int
-	temp      float64
-	maxTokens int
+	message string
+	config  string
 }
 
 func parseAgentFlags(args []string) agentFlags {
 	fs := flag.NewFlagSet("agent", flag.ExitOnError)
 
-	f := agentFlags{
-		sessionID: "cli:direct",
-		markdown:  true,
-	}
+	f := agentFlags{}
 
 	fs.StringVar(&f.message, "m", "", "Single message to send (non-interactive)")
 	fs.StringVar(&f.message, "message", "", "Single message to send (non-interactive)")
-	fs.StringVar(&f.sessionID, "s", f.sessionID, "Session ID")
-	fs.StringVar(&f.sessionID, "session", f.sessionID, "Session ID")
-	noMarkdown := fs.Bool("no-markdown", false, "Disable Markdown rendering")
-	fs.BoolVar(&f.logs, "logs", false, "Show runtime logs during chat")
 	fs.StringVar(&f.config, "config", "", "Path to config file")
-	fs.StringVar(&f.model, "model", "", "LLM model name (overrides config)")
-	fs.StringVar(&f.apiKey, "api-key", "", "API key (overrides config)")
-	fs.StringVar(&f.apiBase, "api-base", "", "API base URL (overrides config)")
-	fs.StringVar(&f.workspace, "workspace", "", "Workspace directory (overrides config)")
-	fs.IntVar(&f.maxIter, "max-iter", 0, "Max agent iterations per message (overrides config)")
-	fs.Float64Var(&f.temp, "temp", 0, "Sampling temperature (overrides config)")
-	fs.IntVar(&f.maxTokens, "max-tokens", 0, "Max response tokens (overrides config)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: nanobot-go agent [flags]\n\nFlags:\n")
@@ -117,9 +82,6 @@ func parseAgentFlags(args []string) agentFlags {
 	}
 	_ = fs.Parse(args)
 
-	if *noMarkdown {
-		f.markdown = false
-	}
 	return f
 }
 
@@ -134,19 +96,12 @@ func printAgentResponse(content string) {
 func runAgent(args []string) {
 	f := parseAgentFlags(args)
 
-	if !f.logs {
-		slog.SetDefault(slog.New(slog.NewTextHandler(ioDiscard{}, nil)))
-	}
-
 	// Load config
 	cfg, err := config.LoadConfig(f.config)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error loading config: %v\n", err)
 		os.Exit(1)
 	}
-
-	// Apply CLI overrides
-	cfg.MergeFlags(f.model, f.apiKey, f.apiBase, f.workspace, f.maxIter, f.temp, f.maxTokens)
 
 	// Determine workspace
 	workspaceDir := cfg.WorkspacePath()
@@ -208,14 +163,8 @@ func runAgent(args []string) {
 	}
 	defer cronService.Stop()
 
-	// Parse session ID into channel + chat_id
+	// Default session ID
 	cliChannelName, cliChatID := "cli", "direct"
-	if strings.Contains(f.sessionID, ":") {
-		parts := strings.SplitN(f.sessionID, ":", 2)
-		cliChannelName, cliChatID = parts[0], parts[1]
-	} else {
-		cliChatID = f.sessionID
-	}
 
 	if f.message != "" {
 		runAgentSingleMessage(ctx, cancel, mb, agentLoop, cliChannelName, cliChatID, f.message)
@@ -478,8 +427,3 @@ func runOnboard(args []string) {
 	fmt.Println()
 	fmt.Println("Want Telegram/WhatsApp? See: https://github.com/HKUDS/nanobot#-chat-apps")
 }
-
-// ioDiscard is an io.Writer that discards all writes (used to silence slog).
-type ioDiscard struct{}
-
-func (ioDiscard) Write(p []byte) (int, error) { return len(p), nil }
