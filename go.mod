@@ -1,4 +1,4 @@
-module github.com/libo/nanobot-go
+module github.com/why1414/nanobot-go
 
 go 1.24.0
 

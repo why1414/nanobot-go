@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/libo/nanobot-go/bus"
-	"github.com/libo/nanobot-go/provider"
-	"github.com/libo/nanobot-go/tool"
+	"github.com/why1414/nanobot-go/bus"
+	"github.com/why1414/nanobot-go/provider"
+	"github.com/why1414/nanobot-go/tool"
 )
 
 // AgentOptions holds configuration for the agent loop.

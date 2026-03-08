@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/libo/nanobot-go/agent"
-	"github.com/libo/nanobot-go/config"
+	"github.com/why1414/nanobot-go/agent"
+	"github.com/why1414/nanobot-go/config"
 )
 
 // runOnboard initializes nanobot-go configuration and workspace.

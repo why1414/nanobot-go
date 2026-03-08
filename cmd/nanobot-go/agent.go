@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/libo/nanobot-go/channel"
+	"github.com/why1414/nanobot-go/channel"
 )
 
 var sessionCounter atomic.Int64

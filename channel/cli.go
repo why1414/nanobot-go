@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/libo/nanobot-go/bus"
+	"github.com/why1414/nanobot-go/bus"
 )
 
 const (

@@ -8,7 +8,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/libo/nanobot-go/channel"
+	"github.com/why1414/nanobot-go/channel"
 )
 
 // runGateway implements the "gateway" subcommand.

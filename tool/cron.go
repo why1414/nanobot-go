@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/libo/nanobot-go/cron"
+	"github.com/why1414/nanobot-go/cron"
 )
 
 // CronTool is a tool to schedule reminders and recurring tasks.

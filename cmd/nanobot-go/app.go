@@ -6,12 +6,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/libo/nanobot-go/agent"
-	"github.com/libo/nanobot-go/bus"
-	"github.com/libo/nanobot-go/config"
-	"github.com/libo/nanobot-go/cron"
-	"github.com/libo/nanobot-go/provider"
-	"github.com/libo/nanobot-go/tool"
+	"github.com/why1414/nanobot-go/agent"
+	"github.com/why1414/nanobot-go/bus"
+	"github.com/why1414/nanobot-go/config"
+	"github.com/why1414/nanobot-go/cron"
+	"github.com/why1414/nanobot-go/provider"
+	"github.com/why1414/nanobot-go/tool"
 )
 
 // App holds all initialized components for a nanobot instance.

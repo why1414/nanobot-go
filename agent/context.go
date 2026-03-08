@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/libo/nanobot-go/provider"
+	"github.com/why1414/nanobot-go/provider"
 )
 
 // BuildMessages constructs the slice of provider.Message to send to the LLM.

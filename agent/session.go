@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/libo/nanobot-go/provider"
+	"github.com/why1414/nanobot-go/provider"
 )
 
 // SessionMessage is a persisted message in a session's history.

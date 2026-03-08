@@ -19,7 +19,7 @@ import (
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 
-	"github.com/libo/nanobot-go/bus"
+	"github.com/why1414/nanobot-go/bus"
 )
 
 // FeishuConfig holds the configuration for the Feishu channel.

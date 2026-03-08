@@ -6,7 +6,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/libo/nanobot-go/bus"
+	"github.com/why1414/nanobot-go/bus"
 )
 
 // Channel is the interface that every chat-platform integration must implement.

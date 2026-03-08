@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/libo/nanobot-go/provider"
+	"github.com/why1414/nanobot-go/provider"
 )
 
 // MemoryStore implements two-layer memory: MEMORY.md (long-term facts) + HISTORY.md (grep-searchable log).

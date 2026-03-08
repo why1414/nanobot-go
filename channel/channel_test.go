@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/libo/nanobot-go/bus"
+	"github.com/why1414/nanobot-go/bus"
 )
 
 // TestBaseChannel_IsAllowed verifies allowlist logic.
