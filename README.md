@@ -24,7 +24,12 @@
 - **`cron/`** — 定时任务服务
 - **`skills/`** — 内置 Skills（memory、cron）
 - **`templates/`** — 系统提示词模板文件
-- **`cmd/nanobot-go/`** — 程序入口（main、gateway）
+- **`cmd/nanobot-go/`** — 程序入口
+  - `main.go` — 命令路由分发
+  - `agent.go` — agent 子命令（交互式/单消息模式）
+  - `gateway.go` — gateway 子命令（多通道服务）
+  - `onboard.go` — onboard 子命令（初始化配置）
+  - `app.go` — 共享初始化逻辑
 
 ---
 

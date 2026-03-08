@@ -6,17 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sync"
-	"time"
 
-	"github.com/libo/nanobot-go/agent"
-	"github.com/libo/nanobot-go/bus"
 	"github.com/libo/nanobot-go/channel"
-	"github.com/libo/nanobot-go/config"
-	"github.com/libo/nanobot-go/cron"
-	"github.com/libo/nanobot-go/provider"
-	"github.com/libo/nanobot-go/tool"
 )
 
 // runGateway implements the "gateway" subcommand.
@@ -32,79 +24,30 @@ func runGateway(args []string) {
 		os.Exit(1)
 	}
 
-	// Load config
-	cfg, err := config.LoadConfig(*configPath)
+	// Initialize app
+	application, err := Initialize(*configPath)
 	if err != nil {
-		slog.Error("failed to load config", "error", err)
+		slog.Error("failed to initialize app", "error", err)
 		os.Exit(1)
 	}
 
 	// Gateway port
-	gatewayPort := cfg.Gateway.Port
-
-	// Determine workspace
-	workspaceDir := cfg.WorkspacePath()
-
-	// Determine model and provider
-	modelName := cfg.GetModel()
-	apiKeyValue := cfg.GetAPIKey(modelName)
-	apiBaseValue := cfg.GetAPIBase(modelName)
-
-	// Log current model configuration
-	slog.Info("model configuration", "model", modelName, "apiBase", apiBaseValue)
-
-	// Create provider
-	p := provider.NewOpenAICompatProvider(apiKeyValue, apiBaseValue, modelName)
-
-	// Initialize tools
-	tools := tool.NewToolRegistry()
-	tools.Register(tool.NewShellTool(workspaceDir, time.Duration(cfg.Tools.Exec.Timeout)*time.Second))
-	tools.Register(tool.NewReadFileTool(workspaceDir))
-	tools.Register(tool.NewWriteFileTool(workspaceDir))
-	tools.Register(tool.NewEditFileTool(workspaceDir))
-	tools.Register(tool.NewListDirTool(workspaceDir))
-
-	// Initialize cron service
-	cronService := cron.NewCronService(filepath.Join(workspaceDir, "cron.json"), nil)
-	tools.Register(tool.NewCronTool(cronService))
-
-	// Initialize workspace (ensure directories and files exist)
-	if err := agent.EnsureWorkspace(workspaceDir, ""); err != nil {
-		slog.Warn("failed to initialize workspace", "error", err)
-	}
-
-	// Initialize skills loader
-	skillsLoader := agent.NewSkillsLoader(workspaceDir, "")
-
-	// Initialize memory store
-	memoryStore := agent.NewMemoryStore(workspaceDir)
-
-	// Create message bus
-	mb := bus.NewMessageBus(32)
-
-	// Create agent loop
-	agentLoop := agent.NewAgentLoop(mb, p, tools, agent.AgentOptions{
-		Model:        modelName,
-		MaxIter:      cfg.Agents.Defaults.MaxToolIterations,
-		Temperature:  cfg.Agents.Defaults.Temperature,
-		MaxTokens:    cfg.Agents.Defaults.MaxTokens,
-		MemoryWindow: cfg.Agents.Defaults.MemoryWindow,
-	}, memoryStore, skillsLoader, workspaceDir)
+	gatewayPort := application.Config.Gateway.Port
 
 	// Initialize channels
-	cliCh := channel.NewCLIChannel(mb)
+	cliCh := channel.NewCLIChannel(application.MessageBus)
 	channels := []channel.Channel{cliCh}
 
 	var feishuCh *channel.FeishuChannel
-	if cfg.Channels.Feishu.AppID != "" && cfg.Channels.Feishu.AppSecret != "" {
+	if application.Config.Channels.Feishu.AppID != "" && application.Config.Channels.Feishu.AppSecret != "" {
 		feishuCh = channel.NewFeishuChannel(channel.FeishuConfig{
-			AppID:      cfg.Channels.Feishu.AppID,
-			AppSecret:  cfg.Channels.Feishu.AppSecret,
-			EncryptKey: cfg.Channels.Feishu.EncryptKey,
-			AllowFrom:  cfg.Channels.Feishu.AllowFrom,
-		}, mb)
+			AppID:      application.Config.Channels.Feishu.AppID,
+			AppSecret:  application.Config.Channels.Feishu.AppSecret,
+			EncryptKey: application.Config.Channels.Feishu.EncryptKey,
+			AllowFrom:  application.Config.Channels.Feishu.AllowFrom,
+		}, application.MessageBus)
 		channels = append(channels, feishuCh)
-		slog.Info("feishu channel enabled", "app_id", cfg.Channels.Feishu.AppID)
+		slog.Info("feishu channel enabled", "app_id", application.Config.Channels.Feishu.AppID)
 	} else {
 		slog.Info("feishu channel disabled (no credentials)")
 	}
@@ -118,10 +61,10 @@ func runGateway(args []string) {
 	setupSignalHandler(cancel)
 
 	// Start cron service
-	if err := cronService.Start(ctx); err != nil {
+	if err := application.StartCron(ctx); err != nil {
 		slog.Warn("failed to start cron service", "error", err)
 	}
-	defer cronService.Stop()
+	defer application.StopCron()
 
 	var wg sync.WaitGroup
 
@@ -129,7 +72,7 @@ func runGateway(args []string) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := agentLoop.Run(ctx); err != nil {
+		if err := application.AgentLoop.Run(ctx); err != nil {
 			slog.Error("agent loop error", "error", err)
 		}
 	}()
@@ -160,7 +103,7 @@ func runGateway(args []string) {
 	go func() {
 		defer wg.Done()
 		for {
-			msg, err := mb.ConsumeOutbound(ctx)
+			msg, err := application.MessageBus.ConsumeOutbound(ctx)
 			if err != nil {
 				return
 			}
