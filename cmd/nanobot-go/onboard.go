@@ -132,5 +132,4 @@ func runOnboard(args []string) {
 	fmt.Println("     Get one at: https://openrouter.ai/keys")
 	fmt.Println("  2. Chat: nanobot-go agent -m \"Hello!\"")
 	fmt.Println()
-	fmt.Println("Want Telegram/WhatsApp? See: https://github.com/HKUDS/nanobot#-chat-apps")
 }
