@@ -2,7 +2,7 @@
 
 [English](README.en.md) | 中文
 
-[NanoBot](https://github.com/libo/nanobot) 的 Go 语言完整实现 — 一个轻量级的、支持工具调用的 AI Agent，兼容任何 OpenAI API 格式的 LLM 端点。
+[NanoBot](https://github.com/HKUDS/nanobot) 的 Go 语言完整实现 — 一个轻量级的、支持工具调用的 AI Agent，兼容任何 OpenAI API 格式的 LLM 端点。
 
 ## ✨ 核心特性
 
@@ -291,4 +291,4 @@ MIT License
 
 ## 🙏 致谢
 
-本项目是 [NanoBot](https://github.com/libo/nanobot) Python 版本的 Go 语言移植版本。
+本项目是 [NanoBot](https://github.com/HKUDS/nanobot) Python 版本的 Go 语言移植版本。
